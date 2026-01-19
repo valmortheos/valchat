@@ -1,0 +1,8 @@
+{
+  "name": "ValChat",
+  "description": "Aplikasi chatting realtime modern mirip Telegram dengan autentikasi Google dan dukungan transfer file.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
