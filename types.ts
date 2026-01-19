@@ -20,7 +20,7 @@ export interface UserProfile {
   avatar_url?: string;
   bio?: string;
   last_seen?: string;
-  updated_at?: string; // Ditambahkan agar TypeScript mengenali kolom ini
+  updated_at?: string; 
 }
 
 export interface ChatSession {
@@ -33,5 +33,16 @@ export interface ChatSession {
 export interface ReadReceipt {
   user_id: string;
   read_at: string;
-  user?: UserProfile; // Joined data
+  user?: UserProfile;
+}
+
+// Tipe Baru untuk Notifikasi
+export interface AppNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: 'info' | 'success' | 'warning' | 'error' | 'message';
+  timestamp: Date;
+  read: boolean;
+  link?: string; // Opsional: jika diklik pindah room
 }

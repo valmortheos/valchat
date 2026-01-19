@@ -11,9 +11,12 @@ import { UserSearch } from './components/UserSearch';
 import { ChatHeader } from './components/chat/ChatHeader';
 import { MediaPreview } from './components/chat/MediaPreview';
 import { CameraCapture } from './components/chat/CameraCapture';
-import { Message, UserProfile, ChatSession } from './types';
+import { Message, UserProfile, ChatSession, AppNotification } from './types';
 import { Loader } from './components/ui/Loader';
 import { APP_NAME, DEFAULT_AVATAR } from './constants';
+// Import Notification
+import { notificationService } from './services/features/notificationService';
+import { NotificationPanel } from './components/ui/NotificationPanel';
 
 const App: React.FC = () => {
   const [session, setSession] = useState<Session | null>(null);
@@ -27,6 +30,10 @@ const App: React.FC = () => {
   const [recentChats, setRecentChats] = useState<ChatSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
+
+  // Notification State
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
 
   // New Media States
   const [previewFile, setPreviewFile] = useState<File | null>(null);
@@ -56,15 +63,26 @@ const App: React.FC = () => {
       }
     });
 
+    // Dark Mode Check
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
         setDarkMode(true);
         document.documentElement.classList.add('dark');
     }
 
-    return () => subscription.unsubscribe();
+    // Subscribe to Notifications
+    const unsubNotif = notificationService.subscribe((notifs) => {
+        setNotifications([...notifs]); // Create copy to trigger re-render
+    });
+    // Request permission on mount
+    notificationService.requestPermission();
+
+    return () => {
+        subscription.unsubscribe();
+        unsubNotif();
+    };
   }, []);
 
-  // Heartbeat: Update Last Seen setiap 60 detik agar status online akurat
+  // Heartbeat: Update Last Seen
   useEffect(() => {
     if (!session?.user) return;
     userService.updateLastSeen(session.user.id);
@@ -183,6 +201,16 @@ const App: React.FC = () => {
                     const newMsg = payload.new as Message;
                     if (newMsg.user_id !== session.user.id) {
                         chatService.markMessagesAsRead([newMsg.id], session.user.id);
+                        
+                        // NOTIFICATION TRIGGER
+                        // Jika window hidden ATAU kita sedang tidak di tab browser ini, kirim notif
+                        if (document.visibilityState === 'hidden') {
+                           notificationService.notify(
+                             `Pesan Baru: ${newMsg.user_email.split('@')[0]}`,
+                             newMsg.content || 'Mengirim file',
+                             'message'
+                           );
+                        }
                     }
                     setMessages(prev => {
                         const exists = prev.find(m => m.id === newMsg.id);
@@ -191,7 +219,6 @@ const App: React.FC = () => {
                     });
                     setTimeout(scrollToBottom, 100);
                 }
-                // Handle Hard Delete: Pesan dihapus dari DB, jadi kita hapus dari state UI
                 else if (payload.eventType === 'DELETE') {
                     const deletedId = payload.old.id;
                     setMessages(prev => prev.filter(m => m.id !== deletedId));
@@ -219,11 +246,9 @@ const App: React.FC = () => {
   const handleBulkDelete = async () => {
      if(!confirm(`Hapus ${selectedMsgIds.size} pesan terpilih untuk Anda?`)) return;
      if(!session) return;
-
      const ids = Array.from(selectedMsgIds);
      try {
          await chatService.deleteMultipleMessagesForMe(ids, session.user.id);
-         // Hapus lokal agar UI responsif
          setMessages(prev => prev.filter(m => !selectedMsgIds.has(m.id)));
          setIsSelectionMode(false);
          setSelectedMsgIds(new Set());
@@ -232,7 +257,7 @@ const App: React.FC = () => {
 
   const handleForwardMessages = () => {
      if(selectedMsgIds.size === 0) return;
-     alert("Fitur Forward Pesan akan segera hadir! (Pilih user tujuan -> Kirim)");
+     alert("Fitur Forward Pesan akan segera hadir!");
      setIsSelectionMode(false);
      setSelectedMsgIds(new Set());
   };
@@ -270,7 +295,7 @@ const App: React.FC = () => {
     });
 
     if (error) {
-        alert("Gagal kirim: " + error.message);
+        notificationService.notify('Gagal mengirim pesan', error.message, 'error');
         setMessages(prev => prev.filter(m => m.id !== tempId));
     } else {
         if (activePartner && !recentChats.find(c => c.room_id === activeRoomId)) {
@@ -279,7 +304,6 @@ const App: React.FC = () => {
     }
   };
 
-  // Callback delete untuk satu pesan (dari Context Menu Bubble)
   const handleDeleteCallback = async (msgId: number) => {
       if (!session) return;
       try {
@@ -295,6 +319,9 @@ const App: React.FC = () => {
   if (loading) return <div className="h-screen bg-gray-50 dark:bg-telegram-dark"><Loader /></div>;
   if (!session) return <Auth />;
 
+  // Hitung unread notifikasi
+  const unreadNotifs = notifications.filter(n => !n.read).length;
+
   return (
     <div className="flex h-screen overflow-hidden bg-gray-100 dark:bg-telegram-dark font-sans text-gray-900 dark:text-gray-100">
       
@@ -305,6 +332,14 @@ const App: React.FC = () => {
            <div className="flex justify-between items-center mb-4">
               <span className="font-bold text-xl tracking-tight">{APP_NAME}</span>
               <div className="flex gap-2">
+                 {/* Notification Toggle */}
+                 <button onClick={() => { setShowNotifPanel(true); notificationService.markAllAsRead(); }} className="p-2 hover:bg-white/20 rounded-full transition relative">
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
+                    {unreadNotifs > 0 && (
+                        <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-telegram-primary"></span>
+                    )}
+                 </button>
+
                  <button onClick={() => {setDarkMode(!darkMode); document.documentElement.classList.toggle('dark');}} className="p-2 hover:bg-white/20 rounded-full transition">
                     {darkMode ? <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg> : <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>}
                  </button>
@@ -338,7 +373,6 @@ const App: React.FC = () => {
                              </span>
                         </div>
                         <p className="text-sm text-gray-500 dark:text-gray-400 truncate flex items-center gap-1">
-                            {/* Logika display pesan dihapus tidak lagi relevan karena Hard Delete */}
                             {chat.last_message?.content || (chat.last_message?.file_type === 'image' ? '📷 Foto' : '📎 Berkas')}
                         </p>
                     </div>
@@ -428,6 +462,13 @@ const App: React.FC = () => {
             onClose={() => setIsCameraOpen(false)}
           />
       )}
+
+      {/* NOTIFICATION PANEL */}
+      <NotificationPanel 
+        notifications={notifications} 
+        isOpen={showNotifPanel} 
+        onClose={() => setShowNotifPanel(false)} 
+      />
 
     </div>
   );
