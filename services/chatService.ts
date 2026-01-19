@@ -24,7 +24,6 @@ export const chatService = {
       .eq('message_id', messageId);
     
     if (error) throw error;
-    // Map data agar sesuai struktur yang enak dipakai UI
     return data.map((item: any) => ({
       user_id: item.user_id,
       read_at: item.read_at,
@@ -49,9 +48,15 @@ export const chatService = {
     if (error) throw error;
   },
 
+  // Bulk Delete For Me
+  deleteMultipleMessagesForMe: async (messageIds: number[], userId: string) => {
+    const inserts = messageIds.map(id => ({ message_id: id, user_id: userId }));
+    const { error } = await supabase.from('deleted_messages').insert(inserts);
+    if (error) throw error;
+  },
+
   // Fetch messages dengan filter 'deleted_messages' untuk user saat ini
   fetchMessages: async (roomId: string, currentUserId: string) => {
-    // 1. Ambil pesan di room ini
     const { data: messages, error } = await supabase
       .from('messages')
       .select('*')
@@ -61,7 +66,6 @@ export const chatService = {
 
     if (error) throw error;
 
-    // 2. Ambil daftar ID pesan yang dihapus oleh user ini (Delete for Me)
     const { data: deletedIds } = await supabase
       .from('deleted_messages')
       .select('message_id')
@@ -70,7 +74,19 @@ export const chatService = {
     
     const hiddenSet = new Set(deletedIds?.map(d => d.message_id));
 
-    // 3. Filter pesan
     return messages.filter(m => !hiddenSet.has(m.id)) as Message[];
+  },
+
+  // Export Chat ke format text untuk di download
+  exportChatToText: (messages: Message[]) => {
+    const textContent = messages.map(m => {
+        const time = new Date(m.created_at).toLocaleString('id-ID');
+        const sender = m.user_email.split('@')[0];
+        const content = m.is_deleted ? '[Pesan Dihapus]' : (m.content || '[File/Gambar]');
+        return `[${time}] ${sender}: ${content}`;
+    }).join('\n');
+
+    const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+    return URL.createObjectURL(blob);
   }
 };
