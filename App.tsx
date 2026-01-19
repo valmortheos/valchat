@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from './services/supabaseClient';
 import { chatService } from './services/chatService';
 import { userService } from './services/userService';
+import { storyService } from './services/features/storyService';
 import { Session, RealtimeChannel } from '@supabase/supabase-js';
 import { Auth } from './components/Auth';
 import { MessageBubble } from './components/MessageBubble';
@@ -11,12 +12,16 @@ import { UserSearch } from './components/UserSearch';
 import { ChatHeader } from './components/chat/ChatHeader';
 import { MediaPreview } from './components/chat/MediaPreview';
 import { CameraCapture } from './components/chat/CameraCapture';
-import { Message, UserProfile, ChatSession, AppNotification } from './types';
+import { Message, UserProfile, ChatSession, AppNotification, GroupedStories } from './types';
 import { Loader } from './components/ui/Loader';
 import { APP_NAME, DEFAULT_AVATAR } from './constants';
-// Import Notification
 import { notificationService } from './services/features/notificationService';
 import { NotificationPanel } from './components/ui/NotificationPanel';
+
+// STORY COMPONENTS
+import { StoryList } from './components/story/StoryList';
+import { StoryViewer } from './components/story/StoryViewer';
+import { StoryCreator } from './components/story/StoryCreator';
 
 const App: React.FC = () => {
   const [session, setSession] = useState<Session | null>(null);
@@ -43,6 +48,14 @@ const App: React.FC = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
 
+  // Typing Indicator State
+  const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+  
+  // STORY STATE
+  const [stories, setStories] = useState<GroupedStories[]>([]);
+  const [viewingStoryGroup, setViewingStoryGroup] = useState<GroupedStories | null>(null);
+  const [isCreatingStory, setIsCreatingStory] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
   const partnerStatusRef = useRef<RealtimeChannel | null>(null);
@@ -63,17 +76,14 @@ const App: React.FC = () => {
       }
     });
 
-    // Dark Mode Check
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
         setDarkMode(true);
         document.documentElement.classList.add('dark');
     }
 
-    // Subscribe to Notifications
     const unsubNotif = notificationService.subscribe((notifs) => {
-        setNotifications([...notifs]); // Create copy to trigger re-render
+        setNotifications([...notifs]);
     });
-    // Request permission on mount
     notificationService.requestPermission();
 
     return () => {
@@ -82,41 +92,25 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Heartbeat: Update Last Seen
+  // Heartbeat & Stories Fetch
   useEffect(() => {
     if (!session?.user) return;
+    
+    // Initial fetch
     userService.updateLastSeen(session.user.id);
+    refreshStories(session.user.id);
+
     const intervalId = setInterval(() => {
         userService.updateLastSeen(session.user.id);
+        refreshStories(session.user.id); // Refresh stories periodically
     }, 60000);
     return () => clearInterval(intervalId);
   }, [session]);
 
-  // Realtime subscription untuk status partner saat chat dibuka
-  useEffect(() => {
-    if (!activePartner || view !== 'chat') {
-        if (partnerStatusRef.current) {
-            supabase.removeChannel(partnerStatusRef.current);
-            partnerStatusRef.current = null;
-        }
-        return;
-    }
-
-    const channel = supabase.channel(`status_partner_${activePartner.id}`)
-        .on(
-            'postgres_changes',
-            { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${activePartner.id}` },
-            (payload) => {
-                const updatedProfile = payload.new as UserProfile;
-                setActivePartner(updatedProfile); 
-            }
-        )
-        .subscribe();
-    
-    partnerStatusRef.current = channel;
-    return () => { supabase.removeChannel(channel); };
-  }, [activePartner?.id, view]);
-
+  const refreshStories = async (userId: string) => {
+      const data = await storyService.fetchStories(userId);
+      setStories(data);
+  };
 
   const initUser = async (session: Session) => {
       try {
@@ -171,8 +165,10 @@ const App: React.FC = () => {
       setView('chat');
       setIsSelectionMode(false);
       setSelectedMsgIds(new Set());
+      setIsPartnerTyping(false); // Reset typing status when switching room
   };
 
+  // ROOM LOGIC: MESSAGES & TYPING INDICATOR
   useEffect(() => {
       if (!session || !activeRoomId || !userProfile) return;
       
@@ -189,8 +185,11 @@ const App: React.FC = () => {
 
       loadMessages();
 
-      const channel = supabase.channel(`room:${activeRoomId}`)
-        .on(
+      // SETUP REALTIME CHANNEL
+      const channel = supabase.channel(`room:${activeRoomId}`);
+
+      // 1. Listen for Database Changes (Messages)
+      channel.on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'messages', filter: `room_id=eq.${activeRoomId}` },
             async (payload) => {
@@ -199,11 +198,12 @@ const App: React.FC = () => {
                 }
                 else if (payload.eventType === 'INSERT') {
                     const newMsg = payload.new as Message;
+                    
+                    // Stop indicator typing jika pesan masuk
+                    if (newMsg.user_id !== session.user.id) setIsPartnerTyping(false);
+
                     if (newMsg.user_id !== session.user.id) {
                         chatService.markMessagesAsRead([newMsg.id], session.user.id);
-                        
-                        // NOTIFICATION TRIGGER
-                        // Jika window hidden ATAU kita sedang tidak di tab browser ini, kirim notif
                         if (document.visibilityState === 'hidden') {
                            notificationService.notify(
                              `Pesan Baru: ${newMsg.user_email.split('@')[0]}`,
@@ -225,11 +225,30 @@ const App: React.FC = () => {
                 }
             }
         )
+        // 2. Listen for Broadcast (Typing Indicator)
+        .on('broadcast', { event: 'typing' }, ({ payload }) => {
+            // Cek apakah event dari user lain
+            if (payload.userId !== session.user.id) {
+                setIsPartnerTyping(payload.isTyping);
+            }
+        })
         .subscribe();
       
       channelRef.current = channel;
       return () => { supabase.removeChannel(channel); };
   }, [activeRoomId, session, userProfile]);
+
+
+  // Handler: Send Broadcast Typing
+  const handleTypingEvent = (isTyping: boolean) => {
+      if (channelRef.current) {
+          channelRef.current.send({
+              type: 'broadcast',
+              event: 'typing',
+              payload: { userId: session?.user.id, isTyping }
+          });
+      }
+  };
 
   const handleToggleSelection = (msgId: number) => {
     const newSelected = new Set(selectedMsgIds);
@@ -319,7 +338,6 @@ const App: React.FC = () => {
   if (loading) return <div className="h-screen bg-gray-50 dark:bg-telegram-dark"><Loader /></div>;
   if (!session) return <Auth />;
 
-  // Hitung unread notifikasi
   const unreadNotifs = notifications.filter(n => !n.read).length;
 
   return (
@@ -339,7 +357,6 @@ const App: React.FC = () => {
                         <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-telegram-primary"></span>
                     )}
                  </button>
-
                  <button onClick={() => {setDarkMode(!darkMode); document.documentElement.classList.toggle('dark');}} className="p-2 hover:bg-white/20 rounded-full transition">
                     {darkMode ? <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg> : <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>}
                  </button>
@@ -353,6 +370,16 @@ const App: React.FC = () => {
               <span>Cari teman / username...</span>
            </div>
         </div>
+
+        {/* STORIES SECTION */}
+        {userProfile && (
+            <StoryList 
+                currentUser={userProfile} 
+                stories={stories} 
+                onSelectGroup={(g) => setViewingStoryGroup(g)}
+                onCreateStory={() => setIsCreatingStory(true)}
+            />
+        )}
 
         <div className="flex-1 overflow-y-auto">
             <div onClick={() => openChat(null)} className={`p-4 border-b border-gray-100 dark:border-white/5 cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5 transition flex gap-4 items-center ${activeRoomId === 'public' ? 'bg-telegram-primary/5 dark:bg-white/5 border-l-4 border-l-telegram-primary' : ''}`}>
@@ -405,6 +432,7 @@ const App: React.FC = () => {
             onCancelSelection={() => { setIsSelectionMode(false); setSelectedMsgIds(new Set()); }}
             onDeleteSelected={handleBulkDelete}
             onForwardSelected={handleForwardMessages}
+            isTyping={isPartnerTyping}
          />
 
          <div className="absolute inset-0 bg-repeat opacity-5 pointer-events-none z-0 mt-16" style={{ backgroundImage: "url('https://web.telegram.org/img/bg_0.png')", backgroundSize: '400px' }}></div>
@@ -439,7 +467,7 @@ const App: React.FC = () => {
                 onSendMessage={(text) => handleSendMessage(text)} 
                 onOpenFile={(file) => setPreviewFile(file)}
                 onOpenCamera={() => setIsCameraOpen(true)}
-                onTyping={() => {}} 
+                onTyping={handleTypingEvent} 
                 disabled={false} 
              />
          )}
@@ -469,6 +497,32 @@ const App: React.FC = () => {
         isOpen={showNotifPanel} 
         onClose={() => setShowNotifPanel(false)} 
       />
+
+      {/* STORY MODALS */}
+      {isCreatingStory && userProfile && (
+          <StoryCreator 
+             userId={userProfile.id}
+             onClose={() => setIsCreatingStory(false)}
+             onSuccess={() => refreshStories(userProfile.id)}
+          />
+      )}
+      
+      {viewingStoryGroup && userProfile && (
+          <StoryViewer 
+             group={viewingStoryGroup}
+             currentUserId={userProfile.id}
+             onClose={() => setViewingStoryGroup(null)}
+             onNextGroup={() => {
+                 const currentIdx = stories.findIndex(g => g.user.id === viewingStoryGroup.user.id);
+                 if (currentIdx < stories.length - 1) setViewingStoryGroup(stories[currentIdx + 1]);
+                 else setViewingStoryGroup(null);
+             }}
+             onPrevGroup={() => {
+                 const currentIdx = stories.findIndex(g => g.user.id === viewingStoryGroup.user.id);
+                 if (currentIdx > 0) setViewingStoryGroup(stories[currentIdx - 1]);
+             }}
+          />
+      )}
 
     </div>
   );

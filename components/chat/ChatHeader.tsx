@@ -11,7 +11,8 @@ interface ChatHeaderProps {
   selectedCount: number;
   onCancelSelection: () => void;
   onDeleteSelected: () => void;
-  onForwardSelected: () => void; // Placeholder logic
+  onForwardSelected: () => void; 
+  isTyping?: boolean; // NEW PROP
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ 
@@ -22,7 +23,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   selectedCount,
   onCancelSelection,
   onDeleteSelected,
-  onForwardSelected
+  onForwardSelected,
+  isTyping = false
 }) => {
   const [showMenu, setShowMenu] = useState(false);
 
@@ -39,14 +41,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
   const handleDeleteAll = () => {
      if(confirm("Apakah Anda yakin ingin menghapus riwayat chat ini? (Hanya berlaku untuk Anda)")) {
-        // Implementasi ideal: Panggil service untuk bulk delete semua ID di room ini
-        // Untuk demo saat ini: Kita alert saja atau implementasi nanti
         alert("Fitur 'Clear History' akan segera hadir. Gunakan fitur select bubble untuk menghapus pesan spesifik.");
      }
      setShowMenu(false);
   };
 
-  // Tampilan Selection Mode
   if (isSelectionMode) {
       return (
         <header className="absolute top-0 left-0 right-0 z-30 bg-white dark:bg-telegram-darkSecondary border-b border-gray-200 dark:border-white/5 p-3 flex items-center justify-between shadow-md animate-slide-up">
@@ -89,7 +88,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                   <img src={activePartner.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full object-cover shadow-sm shrink-0" alt="partner" />
                   <div className="min-w-0">
                       <h2 className="font-bold text-gray-800 dark:text-white leading-tight truncate">{activePartner.full_name}</h2>
-                      <p className="text-xs text-telegram-primary font-bold tracking-wide truncate">@{activePartner.username}</p>
+                      {/* TYPING INDICATOR LOGIC */}
+                      {isTyping ? (
+                          <p className="text-xs text-telegram-primary font-bold italic animate-pulse">sedang mengetik...</p>
+                      ) : (
+                          <p className="text-xs text-telegram-primary font-bold tracking-wide truncate">@{activePartner.username}</p>
+                      )}
                   </div>
               </div>
           ) : (
@@ -97,7 +101,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                    <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-telegram-primary to-blue-400 flex items-center justify-center text-white font-bold shadow-md shrink-0">#</div>
                    <div className="min-w-0">
                       <h2 className="font-bold text-gray-800 dark:text-white leading-tight truncate">Public Room</h2>
-                      <p className="text-xs text-gray-500 truncate">Online</p>
+                      {isTyping ? (
+                          <p className="text-xs text-telegram-primary font-bold italic animate-pulse">seseorang mengetik...</p>
+                      ) : (
+                          <p className="text-xs text-gray-500 truncate">Online</p>
+                      )}
                   </div>
               </div>
           )}

@@ -36,7 +36,6 @@ export interface ReadReceipt {
   user?: UserProfile;
 }
 
-// Tipe Baru untuk Notifikasi
 export interface AppNotification {
   id: string;
   title: string;
@@ -44,5 +43,25 @@ export interface AppNotification {
   type: 'info' | 'success' | 'warning' | 'error' | 'message';
   timestamp: Date;
   read: boolean;
-  link?: string; // Opsional: jika diklik pindah room
+  link?: string;
+}
+
+// STORY TYPES
+export interface Story {
+  id: number;
+  user_id: string;
+  media_type: 'image' | 'video' | 'text';
+  media_url?: string;
+  caption?: string;
+  background_color?: string; // For text stories
+  created_at: string;
+  expires_at: string;
+  user?: UserProfile; // Joined data
+}
+
+// Untuk dikelompokkan per user di UI
+export interface GroupedStories {
+  user: UserProfile;
+  stories: Story[];
+  hasUnseen: boolean; // Logic sederhana: jika timestamp terakhir > waktu user melihat story
 }
