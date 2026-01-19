@@ -38,13 +38,14 @@ export const chatService = {
 
   /**
    * HARD DELETE untuk Semua Orang
-   * 1. Ambil info pesan
-   * 2. Arsip ke tabel message_archives
-   * 3. Hapus file di Storage (jika ada)
-   * 4. Hapus baris dari tabel messages
+   * Proses:
+   * 1. Ambil info pesan (untuk arsip & path file)
+   * 2. Arsip ke tabel message_archives (Audit Log)
+   * 3. Hapus file fisik di Storage (jika ada)
+   * 4. Hapus baris permanen dari tabel messages
    */
   deleteMessageForAll: async (messageId: number) => {
-    // 1. Ambil data pesan dulu sebelum dihapus untuk keperluan arsip & cleanup file
+    // 1. Ambil data pesan dulu
     const { data: msg, error: fetchError } = await supabase
       .from('messages')
       .select('*')
@@ -55,25 +56,23 @@ export const chatService = {
 
     const messageData = msg as Message;
 
-    // 2. Arsipkan Pesan (Masuk ke tabel archive, bukan deleted_messages yg punya FK)
+    // 2. Arsipkan Pesan (ke service terpisah)
     await archiveService.archiveMessage(messageData);
 
     // 3. Cleanup File di Storage jika ada
     if (messageData.file_url) {
        try {
-           // Ekstrak path file dari URL
            const urlObj = new URL(messageData.file_url);
            const pathParts = urlObj.pathname.split(`/${STORAGE_BUCKET}/`);
            if (pathParts.length > 1) {
-               const filePath = pathParts[1]; // decodeURI tidak wajib jika supabase client handle raw string
-               const { error: storageError } = await supabase.storage
+               const filePath = pathParts[1]; 
+               // Hapus file fisik untuk menghemat storage
+               await supabase.storage
                   .from(STORAGE_BUCKET)
                   .remove([decodeURIComponent(filePath)]);
-               
-               if (storageError) console.warn("Gagal hapus file fisik:", storageError.message);
            }
        } catch (e) {
-           console.warn("Error parsing file URL saat delete:", e);
+           console.warn("Error parsing file URL saat delete (File mungkin sudah hilang):", e);
        }
     }
 
@@ -86,7 +85,7 @@ export const chatService = {
     if (deleteError) throw deleteError;
   },
 
-  // Hapus pesan untuk diri sendiri (Hide - Masuk ke tabel deleted_messages yg lama)
+  // Hapus pesan untuk diri sendiri (Hide - Masuk ke tabel deleted_messages)
   deleteMessageForMe: async (messageId: number, userId: string) => {
     const { error } = await supabase
       .from('deleted_messages')
@@ -125,7 +124,7 @@ export const chatService = {
         hiddenSet = new Set(deletedIds.map(d => d.message_id));
       }
     } catch (e) {
-      // Ignore error if table not exists
+      // Ignore error if table doesn't exist yet
     }
 
     return messages.filter(m => !hiddenSet.has(m.id)) as Message[];
@@ -135,7 +134,7 @@ export const chatService = {
     const textContent = messages.map(m => {
         const time = new Date(m.created_at).toLocaleString('id-ID');
         const sender = m.user_email.split('@')[0];
-        const content = m.content || '[File/Gambar]'; // Tidak ada lagi [Pesan Dihapus] karena hard delete
+        const content = m.content || '[File/Gambar]';
         return `[${time}] ${sender}: ${content}`;
     }).join('\n');
 

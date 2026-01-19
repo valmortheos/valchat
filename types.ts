@@ -10,7 +10,6 @@ export interface Message {
   file_url?: string | null;
   file_type?: 'image' | 'file' | null;
   isPending?: boolean;
-  is_deleted?: boolean; // Baru: Status hapus untuk semua
 }
 
 export interface UserProfile {
@@ -21,6 +20,7 @@ export interface UserProfile {
   avatar_url?: string;
   bio?: string;
   last_seen?: string;
+  updated_at?: string; // Ditambahkan agar TypeScript mengenali kolom ini
 }
 
 export interface ChatSession {

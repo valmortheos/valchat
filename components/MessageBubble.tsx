@@ -23,24 +23,15 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({ message, isOw
       }
   };
 
-  // Jika pesan dihapus secara global
-  if (message.is_deleted) {
-      if (isSelectionMode && !isSelected) return null; // Opsional: Sembunyikan pesan terhapus di mode seleksi jika tidak dipilih (biasanya tidak bisa dipilih)
-      return (
-          <div className={`flex w-full mb-2 ${isOwn ? 'justify-end' : 'justify-start'} px-2`}>
-              <div className={`px-3 py-2 rounded-lg text-sm italic text-gray-500 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700`}>
-                  🚫 Pesan ini telah dihapus
-              </div>
-          </div>
-      );
-  }
-
   const handleDeleteForAll = async () => {
-      if(!confirm("Hapus pesan ini untuk semua orang?")) return;
+      if(!confirm("⚠️ PERINGATAN: Hapus pesan ini untuk semua orang?\n\nPesan akan hilang permanen dan file terlampir akan dihapus.")) return;
       try {
           await chatService.deleteMessageForAll(message.id);
           setShowMenu(false);
-      } catch (e) { alert("Gagal hapus"); }
+          // UI update ditangani oleh Realtime Subscription di App.tsx (DELETE event)
+      } catch (e: any) { 
+          alert("Gagal hapus: " + e.message); 
+      }
   };
 
   return (
@@ -59,7 +50,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({ message, isOw
           </div>
       )}
 
-      {/* Context Menu Trigger (Only visible on hover if not selection mode) */}
+      {/* Context Menu Trigger */}
       {!isSelectionMode && (
           <button 
              onClick={(e) => { e.stopPropagation(); setShowMenu(!showMenu); }}
@@ -73,7 +64,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({ message, isOw
 
       {/* Menu Dropdown */}
       {showMenu && !isSelectionMode && (
-          <div className={`absolute top-6 ${isOwn ? 'right-full mr-2' : 'left-full ml-2'} w-40 bg-white dark:bg-gray-800 rounded shadow-lg border border-gray-200 dark:border-gray-700 z-50 overflow-hidden flex flex-col`}>
+          <div className={`absolute top-6 ${isOwn ? 'right-full mr-2' : 'left-full ml-2'} w-44 bg-white dark:bg-gray-800 rounded shadow-lg border border-gray-200 dark:border-gray-700 z-50 overflow-hidden flex flex-col`}>
               <button 
                 onClick={(e) => { e.stopPropagation(); onSelect(); }} 
                 className="px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
@@ -89,7 +80,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({ message, isOw
               {isOwn && (
                   <button 
                     onClick={(e) => { e.stopPropagation(); handleDeleteForAll(); }} 
-                    className="px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 text-red-500"
+                    className="px-4 py-2 text-left text-sm hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 font-medium border-t border-gray-100 dark:border-gray-700"
                   >
                       Hapus untuk Semua
                   </button>
@@ -127,7 +118,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({ message, isOw
               src={message.file_url}
               alt="Attachment"
               loading="lazy"
-              className="rounded-md max-w-full max-h-64 object-cover cursor-pointer"
+              className="rounded-md max-w-full max-h-64 object-cover cursor-pointer hover:opacity-95 transition-opacity"
               onClick={(e) => { if(!isSelectionMode) window.open(message.file_url!, '_blank'); }}
             />
           </div>
