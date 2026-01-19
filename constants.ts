@@ -8,7 +8,7 @@ const env = (import.meta as any).env || {};
 export const SUPABASE_URL = env.VITE_PUBLIC_SUPABASE_URL || "https://jwdesflbtnzfturnqiov.supabase.co";
 export const SUPABASE_ANON_KEY = env.VITE_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp3ZGVzZmxidG56ZnR1cm5xaW92Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg4MDg5NDMsImV4cCI6MjA4NDM4NDk0M30.Q94IIFsXCHoFVvmbKFYvLBiBvPMOpVhmWtlJbM9Ipak";
 
-export const APP_NAME = "Val Chat";
+export const APP_NAME = "ValChat";
 export const STORAGE_BUCKET = "chat-files"; 
 
 // Fallback avatar jika user tidak punya foto profil

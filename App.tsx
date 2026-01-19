@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from './services/supabaseClient';
 import { chatService } from './services/chatService';
+import { userService } from './services/userService';
 import { Session, RealtimeChannel } from '@supabase/supabase-js';
 import { Auth } from './components/Auth';
 import { MessageBubble } from './components/MessageBubble';
@@ -37,6 +38,7 @@ const App: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const partnerStatusRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -48,6 +50,10 @@ const App: React.FC = () => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
       if (session) initUser(session);
+      else {
+          setUserProfile(null);
+          setLoading(false);
+      }
     });
 
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
@@ -58,16 +64,80 @@ const App: React.FC = () => {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Heartbeat: Update Last Seen setiap 60 detik agar status online akurat
+  useEffect(() => {
+    if (!session?.user) return;
+    
+    // Update immediately on mount/login
+    userService.updateLastSeen(session.user.id);
+
+    const intervalId = setInterval(() => {
+        userService.updateLastSeen(session.user.id);
+    }, 60000);
+
+    return () => clearInterval(intervalId);
+  }, [session]);
+
+  // Realtime subscription untuk status partner saat chat dibuka
+  useEffect(() => {
+    if (!activePartner || view !== 'chat') {
+        if (partnerStatusRef.current) {
+            supabase.removeChannel(partnerStatusRef.current);
+            partnerStatusRef.current = null;
+        }
+        return;
+    }
+
+    // Subscribe ke perubahan tabel profiles khusus untuk partner ini
+    const channel = supabase.channel(`status_partner_${activePartner.id}`)
+        .on(
+            'postgres_changes',
+            { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${activePartner.id}` },
+            (payload) => {
+                const updatedProfile = payload.new as UserProfile;
+                setActivePartner(updatedProfile); // Update UI Header
+            }
+        )
+        .subscribe();
+    
+    partnerStatusRef.current = channel;
+
+    return () => {
+        supabase.removeChannel(channel);
+    };
+  }, [activePartner?.id, view]);
+
+
   const initUser = async (session: Session) => {
-      const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-      setUserProfile(profile || { 
-          id: session.user.id, 
-          email: session.user.email!, 
-          full_name: session.user.user_metadata.full_name,
-          avatar_url: session.user.user_metadata.avatar_url
-      });
-      await fetchRecentChats(session.user.id);
-      setLoading(false);
+      try {
+          // 1. Coba ambil profil
+          let profile = await userService.getProfile(session.user.id);
+          
+          // 2. Jika profil belum ada (Baru daftar), buat profil otomatis
+          if (!profile) {
+              const userMeta = session.user.user_metadata || {};
+              const email = session.user.email!;
+              
+              // Ambil data dari metadata (yang dikirim saat signUp) atau fallback
+              const fullName = userMeta.full_name || email.split('@')[0];
+              const username = userMeta.username || undefined;
+              const avatarUrl = userMeta.avatar_url || DEFAULT_AVATAR;
+              
+              await userService.createProfile(session.user.id, email, fullName, avatarUrl, username);
+              
+              // Fetch ulang setelah create
+              profile = await userService.getProfile(session.user.id);
+          }
+
+          if (profile) {
+            setUserProfile(profile);
+            await fetchRecentChats(session.user.id);
+          }
+      } catch (error) {
+          console.error("Error initializing user:", error);
+      } finally {
+          setLoading(false);
+      }
   };
 
   const getRoomId = (userId1: string, userId2: string) => [userId1, userId2].sort().join('_');
@@ -175,8 +245,6 @@ const App: React.FC = () => {
 
   const handleForwardMessages = () => {
      if(selectedMsgIds.size === 0) return;
-     // Disini logika forward akan membuka modal UserSearch, lalu insert messages ke room tujuan.
-     // Untuk MVP:
      alert("Fitur Forward Pesan akan segera hadir! (Pilih user tujuan -> Kirim)");
      setIsSelectionMode(false);
      setSelectedMsgIds(new Set());
@@ -306,7 +374,7 @@ const App: React.FC = () => {
       {/* Main Chat Area */}
       <div className={`${view === 'home' || view === 'settings' || view === 'search' ? 'hidden md:flex' : 'flex'} flex-1 flex-col h-full relative bg-gray-100 dark:bg-telegram-dark w-full max-w-full overflow-hidden`}>
          
-         {/* New Modular Chat Header */}
+         {/* Modular Chat Header */}
          <ChatHeader 
             activePartner={activePartner}
             onBack={() => setView('home')}
