@@ -1,24 +1,23 @@
 # Panduan Konfigurasi Database & Supabase (Hard Delete Version)
 
-... (Bagian atas tetap sama) ...
+... (Script sebelumnya) ...
 
--- 10. AKTIFKAN REALTIME (PENTING!)
--- Tanpa ini, aplikasi harus di-refresh manual untuk melihat pesan baru.
--- Jalankan command ini di SQL Editor Supabase.
+-- 11. FITUR REPLY CHAT
+-- Pastikan kolom reply_to_id ada dan terhubung sebagai Foreign Key ke tabel messages itu sendiri
+ALTER TABLE public.messages 
+ADD COLUMN IF NOT EXISTS reply_to_id BIGINT REFERENCES public.messages(id) ON DELETE SET NULL;
 
-BEGIN;
-  -- Hapus publikasi lama jika ada untuk reset
-  DROP PUBLICATION IF EXISTS supabase_realtime;
-  
-  -- Buat ulang publikasi realtime
-  CREATE PUBLICATION supabase_realtime;
-  
-  -- Masukkan tabel yang butuh fitur realtime
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.read_receipts;
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
-  -- ALTER PUBLICATION supabase_realtime ADD TABLE public.stories; -- Opsional
-COMMIT;
+-- Index untuk mempercepat query saat melakukan JOIN reply_to_message
+CREATE INDEX IF NOT EXISTS idx_messages_reply_to_id ON public.messages(reply_to_id);
 
--- Pastikan RLS Policy mengizinkan SELECT untuk realtime
--- (Sudah dihandle di step sebelumnya, tapi pastikan policy "Users can view messages in rooms they belong to" aktif)
+-- 12. FITUR CLOSE FRIENDS
+... (Script Close Friends) ...
+
+-- 13. UPDATE STORY PRIVACY
+... (Script Story Privacy) ...
+
+-- 14. FITUR REPLY STORY
+ALTER TABLE public.messages ADD COLUMN IF NOT EXISTS story_id BIGINT REFERENCES public.stories(id) ON DELETE SET NULL;
+
+-- Index untuk performa query media gallery di profil
+CREATE INDEX IF NOT EXISTS idx_messages_user_file ON public.messages(user_id, file_type);

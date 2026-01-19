@@ -13,8 +13,9 @@ interface ChatHeaderProps {
   onCancelSelection: () => void;
   onDeleteSelected: () => void;
   onForwardSelected: () => void; 
+  onOpenProfile: () => void; // New Prop
   isTyping?: boolean;
-  isOnline?: boolean; // Status Realtime
+  isOnline?: boolean; 
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ 
@@ -26,6 +27,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onCancelSelection,
   onDeleteSelected,
   onForwardSelected,
+  onOpenProfile,
   isTyping = false,
   isOnline = false
 }) => {
@@ -86,7 +88,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           </button>
           
           {activePartner ? (
-              <div className="flex items-center gap-3 cursor-pointer min-w-0">
+              <div onClick={onOpenProfile} className="flex items-center gap-3 cursor-pointer min-w-0 hover:bg-gray-50 dark:hover:bg-white/5 p-1 rounded-lg transition pr-4">
                   <div className="relative">
                       <img src={activePartner.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full object-cover shadow-sm shrink-0" alt="partner" />
                       {isOnline && (
@@ -138,6 +140,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                         Export Chat
                     </button>
+                    {activePartner && (
+                        <button onClick={() => { onOpenProfile(); setShowMenu(false); }} className="w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-white/5 text-sm text-gray-700 dark:text-gray-200 flex items-center gap-2">
+                             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
+                             Lihat Profil
+                        </button>
+                    )}
                     <button onClick={handleDeleteAll} className="w-full text-left px-4 py-3 hover:bg-red-50 dark:hover:bg-red-900/10 text-sm text-red-500 flex items-center gap-2">
                         <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                         Delete All Messages

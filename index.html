@@ -83,18 +83,16 @@
         background: rgba(36, 47, 61, 0.85);
       }
       
-      /* Utility untuk seleksi bubble */
-      .bubble-selected {
-        position: relative;
+      /* Highlight animation for reply jumping */
+      @keyframes highlightPulse {
+        0% { background-color: rgba(42, 171, 238, 0.0); }
+        20% { background-color: rgba(42, 171, 238, 0.3); }
+        100% { background-color: rgba(42, 171, 238, 0.0); }
       }
-      .bubble-selected::after {
-        content: '';
-        position: absolute;
-        inset: -4px;
-        background: rgba(42, 171, 238, 0.2);
-        border-radius: 12px;
-        pointer-events: none;
-        z-index: 10;
+      
+      .highlight-bubble {
+        animation: highlightPulse 1.5s ease-out;
+        border-radius: 0.5rem;
       }
     </style>
   <script type="importmap">

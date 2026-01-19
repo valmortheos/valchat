@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { GroupedStories, StoryView } from '../../types';
 import { DEFAULT_AVATAR } from '../../constants';
 import { storyService } from '../../services/features/storyService';
+import { supabase } from '../../services/supabaseClient';
 
 interface StoryViewerProps {
   group: GroupedStories;
@@ -19,6 +20,10 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
   const [showViewers, setShowViewers] = useState(false); // Modal viewers
   const [viewersList, setViewersList] = useState<StoryView[]>([]);
   
+  // Reply State
+  const [replyText, setReplyText] = useState('');
+  const [sendingReply, setSendingReply] = useState(false);
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   
   const currentStory = group.stories[currentIndex];
@@ -28,18 +33,17 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
   // Reset state saat pindah story
   useEffect(() => {
     setProgress(0);
-    setIsLoaded(currentStory.media_type === 'text'); // Text langsung dianggap loaded
+    setIsLoaded(currentStory.media_type === 'text'); 
     setShowViewers(false);
+    setReplyText('');
     
-    // Record view jika bukan owner
     if (!isOwner) {
         storyService.recordView(currentStory.id, currentUserId);
     }
   }, [currentIndex, group, isOwner, currentUserId, currentStory]);
 
-  // Timer Logic
   useEffect(() => {
-    if (isPaused || !isLoaded || showViewers) return;
+    if (isPaused || !isLoaded || showViewers || replyText.trim().length > 0) return; // Pause saat mengetik reply
 
     let interval: any;
     if (currentStory.media_type === 'video') {
@@ -57,7 +61,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
        }, 50);
     }
     return () => clearInterval(interval);
-  }, [currentIndex, currentStory, isPaused, isLoaded, showViewers]);
+  }, [currentIndex, currentStory, isPaused, isLoaded, showViewers, replyText]);
 
   const handleNext = () => {
       if (currentIndex < group.stories.length - 1) {
@@ -98,6 +102,41 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
       }
   };
 
+  const handleSendReply = async () => {
+      if (!replyText.trim()) return;
+      setSendingReply(true);
+      try {
+          // 1. Tentukan Room ID (Private antara aku dan pemilik story)
+          const room_id = [currentUserId, group.user.id].sort().join('_');
+          
+          // 2. Fetch data userku untuk meta
+          const { data: { user } } = await supabase.auth.getUser();
+          const { data: myProfile } = await supabase.from('profiles').select('*').eq('id', currentUserId).single();
+          
+          if (!myProfile) throw new Error("Profil tidak ditemukan");
+
+          // 3. Insert Pesan dengan story_id
+          await supabase.from('messages').insert({
+              content: replyText,
+              user_id: currentUserId,
+              user_email: myProfile.username || myProfile.email,
+              user_avatar: myProfile.avatar_url,
+              receiver_id: group.user.id,
+              room_id: room_id,
+              story_id: currentStory.id
+          });
+          
+          // 4. Update last_messages (optional, biasanya handled by trigger but good for optimistic)
+          setReplyText('');
+          onClose(); // Tutup story setelah reply agar user bisa cek chat
+          alert('Balasan terkirim!');
+      } catch (e: any) {
+          alert('Gagal mengirim balasan: ' + e.message);
+      } finally {
+          setSendingReply(false);
+      }
+  };
+
   return (
     <div className="fixed inset-0 z-[60] bg-black flex flex-col items-center justify-center animate-scale-in">
         {/* Progress Bars */}
@@ -126,20 +165,48 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
         {/* Close Button */}
         <button onClick={onClose} className="absolute top-6 right-4 z-30 text-white p-2 hover:bg-white/10 rounded-full"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
         
-        {/* Bottom Controls (Owner Only) */}
-        {isOwner && (
-            <div className="absolute bottom-6 left-0 right-0 px-4 z-30 flex justify-between items-center">
-                <button 
-                    onClick={handleFetchViewers}
-                    className="flex items-center gap-1 text-white bg-black/40 px-3 py-1.5 rounded-full hover:bg-black/60 transition"
-                >
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
-                    <span className="text-sm font-bold">{viewersList.length > 0 ? viewersList.length : 'Views'}</span>
-                </button>
-
-                <button onClick={handleDelete} className="text-white p-2 hover:bg-white/10 rounded-full bg-black/40"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
-            </div>
-        )}
+        {/* Bottom Controls */}
+        <div className="absolute bottom-6 left-0 right-0 px-4 z-30 flex gap-3 items-end">
+             {isOwner ? (
+                <div className="flex justify-between items-center w-full">
+                    <button 
+                        onClick={handleFetchViewers}
+                        className="flex items-center gap-1 text-white bg-black/40 px-3 py-1.5 rounded-full hover:bg-black/60 transition"
+                    >
+                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                        <span className="text-sm font-bold">{viewersList.length > 0 ? viewersList.length : 'Views'}</span>
+                    </button>
+                    <button onClick={handleDelete} className="text-white p-2 hover:bg-white/10 rounded-full bg-black/40"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                </div>
+             ) : (
+                // REPLY INPUT
+                <div className="w-full flex gap-2 items-center animate-slide-up">
+                    <input 
+                        type="text" 
+                        value={replyText}
+                        onChange={(e) => { setReplyText(e.target.value); setIsPaused(true); }}
+                        onFocus={() => setIsPaused(true)}
+                        onBlur={() => !replyText && setIsPaused(false)}
+                        placeholder="Kirim pesan..." 
+                        className="flex-1 bg-black/40 border border-white/30 rounded-full px-4 py-3 text-white placeholder-white/70 focus:outline-none focus:bg-black/60 transition backdrop-blur-sm"
+                        onKeyDown={(e) => e.key === 'Enter' && handleSendReply()}
+                    />
+                    <button 
+                        onClick={handleSendReply} 
+                        disabled={!replyText.trim() || sendingReply}
+                        className="p-3 bg-white/20 hover:bg-white/30 rounded-full text-white backdrop-blur-sm disabled:opacity-50"
+                    >
+                        {sendingReply ? (
+                             <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        ) : (
+                             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
+                        )}
+                    </button>
+                    {/* Love Reaction Shortcut (Mockup) */}
+                    <button className="p-3 text-2xl hover:scale-125 transition">❤️</button>
+                </div>
+             )}
+        </div>
 
         {/* Buffering Indicator */}
         {!isLoaded && (
@@ -151,7 +218,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
         {/* Touch Zones */}
         <div className="absolute inset-0 flex z-0">
             <div className="w-1/3 h-full" onClick={handlePrev} />
-            <div className="w-1/3 h-full" onMouseDown={() => setIsPaused(true)} onMouseUp={() => setIsPaused(false)} onTouchStart={() => setIsPaused(true)} onTouchEnd={() => setIsPaused(false)} />
+            <div className="w-1/3 h-full" onMouseDown={() => setIsPaused(true)} onMouseUp={() => !replyText && setIsPaused(false)} onTouchStart={() => setIsPaused(true)} onTouchEnd={() => !replyText && setIsPaused(false)} />
             <div className="w-1/3 h-full" onClick={handleNext} />
         </div>
 
@@ -169,19 +236,18 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
                         className="max-w-full max-h-full" 
                         autoPlay 
                         playsInline
+                        muted={false}
                         onLoadedData={() => setIsLoaded(true)}
                         onWaiting={() => setIsLoaded(false)}
                         onPlaying={() => setIsLoaded(true)}
                         onTimeUpdate={(e) => {
                             const v = e.currentTarget;
-                            if(v.duration && !isPaused && !showViewers) setProgress((v.currentTime / v.duration) * 100);
+                            if(v.duration && !isPaused && !showViewers && !replyText) setProgress((v.currentTime / v.duration) * 100);
                         }}
                         onEnded={handleNext}
-                        onPause={() => setIsPaused(true)}
-                        onPlay={() => setIsPaused(false)}
                     />
                     {currentStory.caption && (
-                         <div className="absolute bottom-20 left-0 right-0 p-4 bg-black/50 text-white text-center">
+                         <div className="absolute bottom-20 left-0 right-0 p-4 bg-black/50 text-white text-center pb-16">
                              {currentStory.caption}
                          </div>
                     )}
@@ -195,7 +261,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
                         onLoad={() => setIsLoaded(true)}
                     />
                     {currentStory.caption && (
-                         <div className="absolute bottom-20 left-0 right-0 p-4 bg-black/50 text-white text-center">
+                         <div className="absolute bottom-20 left-0 right-0 p-4 bg-black/50 text-white text-center pb-16">
                              {currentStory.caption}
                          </div>
                     )}

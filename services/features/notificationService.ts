@@ -27,7 +27,7 @@ class NotificationService {
   }
 
   // Menambah notifikasi (In-App + System)
-  public notify(title: string, message: string, type: AppNotification['type'] = 'info', link?: string) {
+  public async notify(title: string, message: string, type: AppNotification['type'] = 'info', link?: string) {
     // 1. Tambahkan ke In-App List
     const newNotif: AppNotification = {
       id: Date.now().toString() + Math.random().toString().slice(2),
@@ -42,18 +42,34 @@ class NotificationService {
     this.notifications = [newNotif, ...this.notifications].slice(0, 50); // Simpan max 50
     this.notifyListeners();
 
-    // 2. Trigger Browser Notification (Jika tab hidden/user izinkan)
+    // 2. Trigger Browser/PWA Notification
     if (this.hasPermission && document.visibilityState === 'hidden') {
       try {
-        const n = new Notification(title, {
-          body: message,
-          icon: 'https://ui-avatars.com/api/?background=2AABEE&color=fff&name=VC', // Icon Default
-          tag: 'valchat-msg' // Prevent stacking too many
-        });
-        n.onclick = () => {
-          window.focus();
-          n.close();
-        };
+        // Coba gunakan Service Worker Registration agar notifikasi tampil lebih native di Android
+        // dan bisa handle action click lebih baik di PWA
+        if ('serviceWorker' in navigator && navigator.serviceWorker.ready) {
+            const registration = await navigator.serviceWorker.ready;
+            const options: any = {
+                body: message,
+                icon: 'https://ui-avatars.com/api/?background=2AABEE&color=fff&name=VC',
+                badge: 'https://ui-avatars.com/api/?background=fff&color=000&name=VC&size=96', // Small monochrome icon
+                tag: 'valchat-msg',
+                vibrate: [200, 100, 200],
+                data: { link: link || '/' }
+            };
+            registration.showNotification(title, options);
+        } else {
+            // Fallback ke standard Notification API
+            const n = new Notification(title, {
+              body: message,
+              icon: 'https://ui-avatars.com/api/?background=2AABEE&color=fff&name=VC',
+              tag: 'valchat-msg'
+            });
+            n.onclick = () => {
+              window.focus();
+              n.close();
+            };
+        }
       } catch (e) {
         console.warn("System notification error", e);
       }

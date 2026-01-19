@@ -15,7 +15,7 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
   const [text, setText] = useState('');
   const [bgColor, setBgColor] = useState(COLORS[0]);
   const [caption, setCaption] = useState('');
-  const [privacy, setPrivacy] = useState<'public' | 'private'>('public'); // Default Public
+  const [privacy, setPrivacy] = useState<'public' | 'close_friends' | 'private'>('public'); 
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -47,7 +47,6 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
 
   return (
     <div className="fixed inset-0 z-[60] bg-black flex flex-col animate-fade-in">
-        {/* Header */}
         <div className="flex justify-between items-center p-4 text-white z-10 bg-gradient-to-b from-black/50 to-transparent">
             <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
             <div className="flex gap-4">
@@ -59,7 +58,6 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
             </button>
         </div>
 
-        {/* Content Area */}
         <div className="flex-1 flex items-center justify-center relative overflow-hidden bg-gray-900">
             {mode === 'text' ? (
                 <div className="w-full h-full flex items-center justify-center p-8" style={{ backgroundColor: bgColor }}>
@@ -98,8 +96,7 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
             )}
         </div>
 
-        {/* Footer: Caption & Privacy */}
-        <div className="p-4 bg-black/80 flex flex-col gap-3">
+        <div className="p-4 bg-black/80 flex flex-col gap-3 pb-8">
              {mode === 'media' && file && (
                 <input 
                     type="text" 
@@ -110,7 +107,6 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
                 />
              )}
              
-             {/* Privacy Selector */}
              <div className="flex items-center justify-between text-white text-sm">
                  <span className="text-gray-400">Siapa yang bisa melihat?</span>
                  <div className="flex bg-gray-800 rounded-lg p-1">
@@ -121,10 +117,16 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
                          Publik
                      </button>
                      <button 
+                        onClick={() => setPrivacy('close_friends')}
+                        className={`px-3 py-1 rounded-md transition ${privacy === 'close_friends' ? 'bg-green-500 text-white' : 'text-gray-400'}`}
+                     >
+                         Close Friends
+                     </button>
+                     <button 
                         onClick={() => setPrivacy('private')}
                         className={`px-3 py-1 rounded-md transition ${privacy === 'private' ? 'bg-red-500 text-white' : 'text-gray-400'}`}
                      >
-                         Privat
+                         Saya Saja
                      </button>
                  </div>
              </div>

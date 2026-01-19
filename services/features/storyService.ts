@@ -54,7 +54,7 @@ export const storyService = {
     file: File | null, 
     caption: string, 
     bgColor?: string, 
-    privacy: 'public' | 'private' = 'public'
+    privacy: 'public' | 'close_friends' | 'private' = 'public'
   ) => {
     let mediaUrl = null;
 

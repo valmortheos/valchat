@@ -5,13 +5,14 @@ import { userService } from './services/userService';
 import { storyService } from './services/features/storyService';
 import { Session } from '@supabase/supabase-js';
 import { Auth } from './components/Auth';
-import { MessageBubble } from './components/MessageBubble';
+import { MessageBubble } from './components/chat/MessageBubble';
 import { ChatInput } from './components/ChatInput';
 import { Settings } from './components/Settings';
 import { UserSearch } from './components/UserSearch';
 import { ChatHeader } from './components/chat/ChatHeader';
 import { MediaPreview } from './components/chat/MediaPreview';
 import { CameraCapture } from './components/chat/CameraCapture';
+import { UserProfileViewer } from './components/profile/UserProfileViewer'; // NEW
 import { Message, UserProfile, ChatSession, AppNotification, GroupedStories } from './types';
 import { Loader } from './components/ui/Loader';
 import { APP_NAME, DEFAULT_AVATAR } from './constants';
@@ -27,7 +28,7 @@ import { StoryList } from './components/story/StoryList';
 import { StoryViewer } from './components/story/StoryViewer';
 import { StoryCreator } from './components/story/StoryCreator';
 
-const App: React.FC = () => {
+export const App: React.FC = () => {
   const [session, setSession] = useState<Session | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   
@@ -40,29 +41,28 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
 
-  // Notification State
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
 
-  // New Media States
   const [previewFile, setPreviewFile] = useState<File | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   
-  // Selection Mode State
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
 
-  // Typing & Online State
+  // REPLY STATE
+  const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
+
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
   
-  // STORY STATE
   const [stories, setStories] = useState<GroupedStories[]>([]);
   const [viewingStoryGroup, setViewingStoryGroup] = useState<GroupedStories | null>(null);
   const [isCreatingStory, setIsCreatingStory] = useState(false);
+  
+  // PROFILE VIEWER STATE
+  const [viewingProfile, setViewingProfile] = useState<UserProfile | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  // --- INITIALIZATION ---
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -96,23 +96,16 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // --- GLOBAL REALTIME (ONLINE USERS & SIDEBAR UPDATES) ---
-  
-  // Callback saat ada pesan baru dari room MANAPUN (untuk update sidebar)
   const handleGlobalNewMessage = useCallback((msg: Message) => {
       if (!session?.user) return;
-      
-      // Jika pesan bukan dari room yang sedang aktif, update recent chats
       if (msg.room_id !== activeRoomId) {
           fetchRecentChats(session.user.id);
           notificationService.notify(
-              `Pesan Baru: ${msg.user_email.split('@')[0]}`,
+              `Pesan dari ${msg.user_email?.split('@')[0] || 'User'}`,
               msg.content || 'Mengirim file',
               'message'
           );
       } else {
-          // Jika pesan dari room aktif TAPI dari orang lain (Insert event), 
-          // ini akan dihandle oleh useRealtimeChat, tapi kita refresh sidebar juga biar urutannya naik
           fetchRecentChats(session.user.id);
       }
   }, [activeRoomId, session]);
@@ -122,7 +115,6 @@ const App: React.FC = () => {
       onNewMessageGlobal: handleGlobalNewMessage
   });
 
-  // Load Stories Periodically
   useEffect(() => {
       if (!session?.user) return;
       refreshStories(session.user.id);
@@ -130,29 +122,53 @@ const App: React.FC = () => {
       return () => clearInterval(interval);
   }, [session?.user?.id]);
 
-
-  // --- CHAT ROOM REALTIME ---
-
+  // --- CRITICAL FIX: MANUAL HYDRATION FOR REALTIME MESSAGES ---
+  // Masalah: Supabase Realtime hanya mengirim row mentah, tidak ada JOIN ke reply_to_message.
+  // Solusi: Kita cari pesan induknya di state 'messages' yang ada, lalu tempel manual.
   const handleMessageReceived = useCallback((newMsg: Message) => {
       if (!session?.user) return;
-
-      // Reset typing indicator jika pesan datang dari partner
+      
+      // Mark as read jika bukan kita pengirimnya
       if (newMsg.user_id !== session.user.id) {
           setIsPartnerTyping(false);
-          // Mark as read immediately if we are in the room
           chatService.markMessagesAsRead([newMsg.id], session.user.id);
       }
 
       setMessages(prev => {
-          // Prevent duplicates (Optimistic UI vs Realtime Insert)
+          // 1. Cek duplikasi (Penting untuk menghindari flicker Optimistic UI vs Realtime)
           const exists = prev.find(m => m.id === newMsg.id);
           if (exists) return prev;
           
-          // Hapus pending message jika ada (biasanya ID pending pakai Date.now yg mungkin beda, 
-          // tapi kalau logic create message disamakan ID-nya akan lebih baik. 
-          // Disini kita append saja, filter pending dilakukan saat render/send)
-          return [...prev.filter(m => !m.isPending), newMsg];
+          // 2. Hydration Logic (Memperbaiki Reply Bubble yang hilang)
+          // Jika pesan ini adalah reply (punya ID), TAPI data objectnya kosong (karena dari realtime)
+          if (newMsg.reply_to_id && !newMsg.reply_to_message) {
+              const originalMsg = prev.find(m => m.id === newMsg.reply_to_id);
+              
+              if (originalMsg) {
+                  // Kita rekonstruksi data reply_to_message dari pesan yang ada di memori
+                  newMsg.reply_to_message = {
+                      id: originalMsg.id,
+                      content: originalMsg.content,
+                      user_email: originalMsg.user_email,
+                      file_type: originalMsg.file_type
+                  };
+              } else {
+                 // Fallback: Jika pesan asli tidak ada di list (misal chat lama sekali), 
+                 // UI akan menampilkan "Pesan tidak ditemukan" atau nama user saja jika kita fetch
+                 // Untuk performa, kita skip fetch single message di sini.
+              }
+          }
+          
+          // 3. Hydration Story Reply (Optional)
+          // Logika sama untuk story reply jika diperlukan di masa depan
+
+          // Hapus pesan pending (Optimistic) yang mungkin kita buat sebelumnya
+          // Kita filter semua pesan pending dari user ini agar tidak double
+          const cleanPrev = prev.filter(m => !(m.isPending && m.content === newMsg.content));
+          
+          return [...cleanPrev, newMsg];
       });
+      
       setTimeout(scrollToBottom, 100);
   }, [session?.user?.id]);
 
@@ -161,6 +177,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleMessageDeleted = useCallback((deletedId: number) => {
+      // Realtime delete: langsung hapus dari UI
       setMessages(prev => prev.filter(m => m.id !== deletedId));
   }, []);
 
@@ -173,9 +190,6 @@ const App: React.FC = () => {
       onTypingChange: setIsPartnerTyping
   });
 
-  
-  // --- HELPERS ---
-
   const refreshStories = async (userId: string) => {
       const data = await storyService.fetchStories(userId);
       setStories(data);
@@ -186,8 +200,9 @@ const App: React.FC = () => {
           let profile = await userService.getProfile(session.user.id);
           if (!profile || !profile.username) {
               const userMeta = session.user.user_metadata || {};
-              const email = session.user.email!;
-              const fullName = userMeta.full_name || email.split('@')[0];
+              // Ensure email is a string, fallback to empty if missing (e.g. phone auth)
+              const email = session.user.email || ''; 
+              const fullName = userMeta.full_name || (email ? email.split('@')[0] : 'User');
               const username = userMeta.username || undefined; 
               const avatarUrl = userMeta.avatar_url || DEFAULT_AVATAR;
               
@@ -212,15 +227,12 @@ const App: React.FC = () => {
         const { data } = await supabase.from('last_messages').select('*').or(`user_id.eq.${userId},receiver_id.eq.${userId}`);
         if (data) {
              const chats: ChatSession[] = [];
-             // Sort agar yang terbaru diatas
              const sortedData = (data as Message[]).sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
              
              for (const msg of sortedData) {
                  if (msg.room_id === 'public') continue;
                  const partnerId = msg.user_id === userId ? msg.receiver_id : msg.user_id;
                  if (!partnerId) continue;
-                 
-                 // Fetch partner profile (bisa dioptimasi dengan join query nanti)
                  const { data: partnerProfile } = await supabase.from('profiles').select('*').eq('id', partnerId).single();
                  if (partnerProfile) {
                      chats.push({ room_id: msg.room_id, partner: partnerProfile, last_message: msg });
@@ -238,8 +250,8 @@ const App: React.FC = () => {
       setActivePartner(partner);
       setActiveRoomId(roomId);
       setView('chat');
-      
-      // Load initial messages
+      setReplyToMessage(null); 
+
       chatService.fetchMessages(roomId, session.user.id).then(msgs => {
           setMessages(msgs);
           setTimeout(scrollToBottom, 100);
@@ -281,11 +293,12 @@ const App: React.FC = () => {
      setSelectedMsgIds(new Set());
   };
 
-  const handleSendMessage = async (content: string, fileUrl?: string, fileType?: 'image' | 'file') => {
+  const handleSendMessage = async (content: string, replyTo?: Message | null, fileUrl?: string, fileType?: 'image' | 'file') => {
     if (!session?.user || !userProfile) return;
 
-    // Optimistic Update
     const tempId = Date.now();
+    // OPTIMISTIC MESSAGE
+    // Pesan ini langsung muncul di UI lengkap dengan reply_to_message nya.
     const newMessage: Message = {
         id: tempId,
         created_at: new Date().toISOString(),
@@ -297,11 +310,19 @@ const App: React.FC = () => {
         room_id: activeRoomId,
         file_url: fileUrl,
         file_type: fileType,
-        isPending: true
+        isPending: true,
+        reply_to_id: replyTo?.id,
+        reply_to_message: replyTo ? {
+            id: replyTo.id,
+            content: replyTo.content,
+            user_email: replyTo.user_email || 'User', // Ensure email is passed for formatting
+            file_type: replyTo.file_type
+        } : undefined
     };
 
     setMessages(prev => [...prev, newMessage]);
     setTimeout(scrollToBottom, 50);
+    setReplyToMessage(null); 
 
     const { error } = await supabase.from('messages').insert({
         content,
@@ -311,14 +332,14 @@ const App: React.FC = () => {
         receiver_id: activePartner?.id,
         room_id: activeRoomId,
         file_url: fileUrl,
-        file_type: fileType
+        file_type: fileType,
+        reply_to_id: replyTo?.id
     });
 
     if (error) {
         notificationService.notify('Gagal mengirim pesan', error.message, 'error');
         setMessages(prev => prev.filter(m => m.id !== tempId));
     } else {
-        // Refresh sidebar agar chat naik ke atas
         fetchRecentChats(userProfile.id);
     }
   };
@@ -335,8 +356,6 @@ const App: React.FC = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // --- RENDER ---
-
   if (loading) return <div className="h-screen bg-gray-50 dark:bg-telegram-dark"><Loader /></div>;
   if (!session) return <Auth />;
 
@@ -345,7 +364,7 @@ const App: React.FC = () => {
   return (
     <div className="flex h-screen overflow-hidden bg-gray-100 dark:bg-telegram-dark font-sans text-gray-900 dark:text-gray-100 relative">
       
-      {/* Sidebar - HIDDEN ON MOBILE WHEN CHAT IS ACTIVE */}
+      {/* Sidebar */}
       <div className={`
           flex-col w-full md:w-96 bg-white dark:bg-telegram-darkSecondary border-r border-gray-200 dark:border-black/20 z-20 transition-all duration-300
           ${view === 'chat' ? 'hidden md:flex' : 'flex'}
@@ -365,7 +384,7 @@ const App: React.FC = () => {
                     {darkMode ? <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg> : <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>}
                  </button>
                  <button onClick={() => setView('settings')} className="p-2 hover:bg-white/20 rounded-full transition">
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                  </button>
               </div>
            </div>
@@ -375,7 +394,6 @@ const App: React.FC = () => {
            </div>
         </div>
 
-        {/* STORIES SECTION */}
         {userProfile && (
             <StoryList 
                 currentUser={userProfile} 
@@ -429,7 +447,7 @@ const App: React.FC = () => {
       {view === 'settings' && userProfile && <Settings user={userProfile} onClose={() => setView('home')} onUpdate={() => initUser(session!)} />}
       {view === 'search' && userProfile && <UserSearch currentUserId={userProfile.id} onSelectUser={(u) => openChat(u)} onClose={() => setView('home')} />}
 
-      {/* Main Chat Area - SLIDE IN ANIMATION ON MOBILE */}
+      {/* Main Chat Area */}
       <div className={`
           flex-1 flex-col h-full relative bg-gray-100 dark:bg-telegram-dark w-full max-w-full overflow-hidden
           ${view === 'chat' ? 'flex animate-slide-in-right' : 'hidden md:flex'}
@@ -444,6 +462,7 @@ const App: React.FC = () => {
             onCancelSelection={() => { setIsSelectionMode(false); setSelectedMsgIds(new Set()); }}
             onDeleteSelected={handleBulkDelete}
             onForwardSelected={handleForwardMessages}
+            onOpenProfile={() => activePartner && setViewingProfile(activePartner)}
             isTyping={isPartnerTyping}
             isOnline={activePartner ? onlineUsers.has(activePartner.id) : false}
          />
@@ -460,28 +479,36 @@ const App: React.FC = () => {
                     <p className="text-sm">Mulai percakapan sekarang!</p>
                 </div>
             ) : (
-                messages.map(msg => (
-                    <MessageBubble 
-                        key={msg.id} 
-                        message={msg} 
-                        isOwn={msg.user_id === userProfile?.id}
-                        isSelected={selectedMsgIds.has(msg.id)}
-                        isSelectionMode={isSelectionMode}
-                        onSelect={() => handleToggleSelection(msg.id)}
-                        onDelete={handleDeleteCallback}
-                    />
-                ))
+                messages.map((msg, index) => {
+                    const prevMsg = messages[index - 1];
+                    const isSameUser = prevMsg && prevMsg.user_id === msg.user_id;
+                    return (
+                        <MessageBubble 
+                            key={msg.id} 
+                            message={msg} 
+                            isOwn={msg.user_id === userProfile?.id}
+                            isSelected={selectedMsgIds.has(msg.id)}
+                            isSelectionMode={isSelectionMode}
+                            onSelect={() => handleToggleSelection(msg.id)}
+                            onDelete={handleDeleteCallback}
+                            onReply={(m) => { setReplyToMessage(m); }}
+                            prevMessageSameUser={isSameUser}
+                        />
+                    );
+                })
             )}
             <div ref={messagesEndRef} />
          </div>
 
          {!isSelectionMode && (
              <ChatInput 
-                onSendMessage={(text) => handleSendMessage(text)} 
+                onSendMessage={(text, replyTo) => handleSendMessage(text, replyTo)} 
                 onOpenFile={(file) => setPreviewFile(file)}
                 onOpenCamera={() => setIsCameraOpen(true)}
                 onTyping={(t) => sendTypingEvent(t)} 
-                disabled={false} 
+                disabled={false}
+                replyTo={replyToMessage}
+                onCancelReply={() => setReplyToMessage(null)}
              />
          )}
       </div>
@@ -489,7 +516,7 @@ const App: React.FC = () => {
       {previewFile && (
           <MediaPreview 
             file={previewFile} 
-            onSend={(url, caption, type) => handleSendMessage(caption, url, type)}
+            onSend={(url, caption, type) => handleSendMessage(caption, null, url, type)}
             onClose={() => setPreviewFile(null)}
           />
       )}
@@ -504,14 +531,12 @@ const App: React.FC = () => {
           />
       )}
 
-      {/* NOTIFICATION PANEL */}
       <NotificationPanel 
         notifications={notifications} 
         isOpen={showNotifPanel} 
         onClose={() => setShowNotifPanel(false)} 
       />
 
-      {/* STORY MODALS */}
       {isCreatingStory && userProfile && (
           <StoryCreator 
              userId={userProfile.id}
@@ -524,7 +549,7 @@ const App: React.FC = () => {
           <StoryViewer 
              group={viewingStoryGroup}
              currentUserId={userProfile.id}
-             onClose={() => setViewingStoryGroup(null)}
+             onClose={() => { setViewingStoryGroup(null); fetchRecentChats(userProfile.id); }} // Refresh chat list on close if replied
              onNextGroup={() => {
                  const currentIdx = stories.findIndex(g => g.user.id === viewingStoryGroup.user.id);
                  if (currentIdx < stories.length - 1) setViewingStoryGroup(stories[currentIdx + 1]);
@@ -536,9 +561,16 @@ const App: React.FC = () => {
              }}
           />
       )}
+      
+      {viewingProfile && (
+          <UserProfileViewer 
+              user={viewingProfile} 
+              currentRoomId={activeRoomId}
+              onClose={() => setViewingProfile(null)}
+              isOnline={onlineUsers.has(viewingProfile.id)}
+          />
+      )}
 
     </div>
   );
 };
-
-export default App;

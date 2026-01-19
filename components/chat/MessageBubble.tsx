@@ -1,8 +1,8 @@
 import React, { memo, useState } from 'react';
-import { Message } from '../types';
-import { DEFAULT_AVATAR } from '../constants';
-import { MessageStatus } from './chat/MessageStatus';
-import { chatService } from '../services/chatService';
+import { Message } from '../../types';
+import { DEFAULT_AVATAR } from '../../constants';
+import { MessageStatus } from './MessageStatus';
+import { chatService } from '../../services/chatService';
 
 interface MessageBubbleProps {
   message: Message;
@@ -39,9 +39,34 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({
       try {
           await chatService.deleteMessageForAll(message.id);
           setShowMenu(false);
-          // UI update ditangani oleh Realtime Subscription di App.tsx (DELETE event)
       } catch (e: any) { 
           alert("Gagal hapus: " + e.message); 
+      }
+  };
+
+  // Safe Name Formatter
+  const formatName = (nameOrEmail?: string) => {
+      if (!nameOrEmail) return 'Pengguna';
+      if (nameOrEmail.includes('@')) return nameOrEmail.split('@')[0];
+      return nameOrEmail;
+  };
+
+  // Scroll to Message logic
+  const handleReplyClick = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (message.reply_to_message) {
+          const targetId = `msg-${message.reply_to_message.id}`;
+          const el = document.getElementById(targetId);
+          if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              // Highlight effect
+              el.classList.add('highlight-bubble');
+              setTimeout(() => el.classList.remove('highlight-bubble'), 1500);
+          } else {
+              // Jika pesan tidak ada (misal pagination belum load), beri tahu user
+              // Idealnya fetch message, tapi untuk MVP kita alert/toast
+              console.log("Pesan asli tidak ditemukan di viewport");
+          }
       }
   };
 
@@ -50,10 +75,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({
       ? `rounded-2xl ${prevMessageSameUser ? 'rounded-tr-md' : 'rounded-tr-none'}`
       : `rounded-2xl ${prevMessageSameUser ? 'rounded-tl-md' : 'rounded-tl-none'}`;
 
+  // Warna Aksen untuk Reply
+  const replyAccentColor = isOwn ? 'bg-green-600' : 'bg-telegram-primary';
+  const replyTextColor = isOwn ? 'text-green-700 dark:text-green-300' : 'text-telegram-primary';
+
   return (
     <div 
         id={`msg-${message.id}`}
-        className={`relative flex w-full mb-1 group px-2 select-none ${isOwn ? 'justify-end' : 'justify-start'} ${message.isPending ? 'opacity-70' : 'opacity-100'} transition-all duration-200 cursor-pointer`}
+        className={`relative flex w-full mb-1 group px-2 select-none ${isOwn ? 'justify-end' : 'justify-start'} ${message.isPending ? 'opacity-70' : 'opacity-100'} transition-all duration-300 cursor-pointer`}
         onDoubleClick={() => onReply && onReply(message)}
         onClick={handleClick}
         onMouseLeave={() => setShowMenu(false)}
@@ -133,23 +162,55 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({
             : 'bg-telegram-messageIn dark:bg-telegram-messageInDark text-gray-800 dark:text-white'
         }`}
       >
-        {/* REPLY CONTEXT DISPLAY */}
-        {message.reply_to_message && (
-            <div className={`mb-2 pl-2 border-l-[3px] rounded-sm text-xs cursor-pointer opacity-80 hover:opacity-100 ${isOwn ? 'border-green-600/50 bg-black/5 dark:bg-black/10' : 'border-telegram-primary/50 bg-telegram-primary/5'}`}>
-                <div className="py-1 pr-1">
-                    <p className={`font-bold truncate ${isOwn ? 'text-green-800 dark:text-green-300' : 'text-telegram-primary'}`}>
-                        {message.reply_to_message.user_email?.split('@')[0] || 'Unknown'}
+        {/* STORY REPLY CONTEXT */}
+        {message.story_id && message.story && (
+             <div className="mb-2 border-l-[3px] border-orange-500 bg-orange-500/10 rounded-r-md p-1.5 flex gap-2 items-center">
+                 {message.story.media_type === 'image' || message.story.media_type === 'video' ? (
+                     <div className="w-8 h-12 bg-gray-300 rounded overflow-hidden flex-shrink-0">
+                        {message.story.media_type === 'image' ? (
+                            <img src={message.story.media_url} className="w-full h-full object-cover" alt="story" />
+                        ) : (
+                            <video src={message.story.media_url} className="w-full h-full object-cover" />
+                        )}
+                     </div>
+                 ) : (
+                     <div className="w-8 h-12 flex items-center justify-center bg-gray-800 text-white text-[8px] text-center p-1 rounded">
+                         Teks
+                     </div>
+                 )}
+                 <div className="flex-1 min-w-0">
+                     <p className="text-xs font-bold text-orange-600 dark:text-orange-400">Membalas Story</p>
+                     <p className="text-xs truncate opacity-70 italic">{message.story.caption || 'Media Story'}</p>
+                 </div>
+             </div>
+        )}
+
+        {/* MESSAGE REPLY CONTEXT (TELEGRAM STYLE) */}
+        {message.reply_to_message && !message.story_id && (
+            <div 
+                onClick={handleReplyClick}
+                className="mb-1 mt-0.5 relative overflow-hidden rounded-[4px] cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+            >
+                {/* Vertical Accent Bar */}
+                <div className={`absolute top-0 bottom-0 left-0 w-[3px] rounded-l-sm ${replyAccentColor}`}></div>
+                
+                <div className="pl-3 pr-2 py-0.5">
+                    <p className={`text-xs font-bold truncate ${replyTextColor}`}>
+                        {formatName(message.reply_to_message.user_email)}
                     </p>
-                    <p className="truncate text-gray-600 dark:text-gray-300">
-                        {message.reply_to_message.file_type ? (message.reply_to_message.file_type === 'image' ? '📷 Foto' : '📎 Berkas') : message.reply_to_message.content}
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate opacity-90 flex items-center gap-1">
+                        {message.reply_to_message.file_type === 'image' && <span className="text-[10px]">📷</span>}
+                        {message.reply_to_message.file_type === 'file' && <span className="text-[10px]">📎</span>}
+                        {message.reply_to_message.file_type ? (message.reply_to_message.file_type === 'image' ? 'Foto' : 'Berkas') : (message.reply_to_message.content || 'Pesan dihapus')}
                     </p>
                 </div>
             </div>
         )}
 
+        {/* SENDER NAME (ONLY FOR OTHERS IN GROUP/PUBLIC) */}
         {!isOwn && !prevMessageSameUser && (
           <p className="text-xs font-bold text-telegram-primary mb-1 truncate">
-            {message.user_email?.split('@')[0] || 'User'}
+            {formatName(message.user_email)}
           </p>
         )}
 
@@ -170,22 +231,24 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({
             href={isSelectionMode ? '#' : message.file_url}
             target={isSelectionMode ? undefined : "_blank"}
             rel="noopener noreferrer"
-            className="flex items-center gap-2 bg-black/5 dark:bg-white/10 p-2 rounded mb-2 hover:bg-black/10 transition overflow-hidden"
+            className="flex items-center gap-3 bg-black/5 dark:bg-white/10 p-2 rounded-lg mb-1 hover:bg-black/10 transition overflow-hidden"
             onClick={(e) => isSelectionMode && e.preventDefault()}
           >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-telegram-primary shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-            </svg>
+            <div className="w-10 h-10 bg-telegram-primary/20 rounded-full flex items-center justify-center shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-telegram-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+            </div>
             <div className="overflow-hidden min-w-0">
-               <p className="text-xs truncate font-medium">Lampiran File</p>
-               <p className="text-[10px] opacity-70 truncate">Klik untuk unduh</p>
+               <p className="text-sm truncate font-medium">Dokumen</p>
+               <p className="text-[10px] opacity-70 truncate">Klik untuk mengunduh</p>
             </div>
           </a>
         )}
 
-        {message.content && <p className="whitespace-pre-wrap break-words overflow-hidden">{message.content}</p>}
+        {message.content && <p className="whitespace-pre-wrap break-words overflow-hidden leading-relaxed">{message.content}</p>}
 
-        <div className={`text-[10px] mt-1 text-right flex items-center justify-end gap-1 ${isOwn ? 'text-green-800 dark:text-green-200' : 'text-gray-400'}`}>
+        <div className={`text-[10px] mt-0.5 text-right flex items-center justify-end gap-1 ${isOwn ? 'text-green-800 dark:text-green-200' : 'text-gray-400'}`}>
            {isOwn ? (
                <MessageStatus 
                    messageId={message.id} 
@@ -200,4 +263,4 @@ export const MessageBubble: React.FC<MessageBubbleProps> = memo(({
       </div>
     </div>
   );
-};
+});

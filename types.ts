@@ -10,6 +10,20 @@ export interface Message {
   file_url?: string | null;
   file_type?: 'image' | 'file' | null;
   isPending?: boolean;
+  reply_to_id?: number | null;
+  reply_to_message?: {
+    id: number;
+    content: string | null;
+    user_email: string;
+    file_type?: 'image' | 'file' | null;
+  };
+  story_id?: number | null; // New field for Story Reply
+  story?: {
+    id: number;
+    media_url?: string;
+    media_type: 'image' | 'video' | 'text';
+    caption?: string;
+  };
 }
 
 export interface UserProfile {
@@ -62,9 +76,9 @@ export interface Story {
   background_color?: string; 
   created_at: string;
   expires_at: string;
-  privacy: 'public' | 'private'; 
+  privacy: 'public' | 'close_friends' | 'private'; 
   user?: UserProfile; 
-  views?: StoryView[]; // Joined views
+  views?: StoryView[]; 
   view_count?: number;
 }
 

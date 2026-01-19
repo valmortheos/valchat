@@ -4,7 +4,6 @@ import { archiveService } from './features/archiveService';
 import { STORAGE_BUCKET } from '../constants';
 
 export const chatService = {
-  // Tandai pesan sudah dibaca
   markMessagesAsRead: async (messageIds: number[], userId: string) => {
     if (messageIds.length === 0) return;
     
@@ -36,16 +35,7 @@ export const chatService = {
     }));
   },
 
-  /**
-   * HARD DELETE untuk Semua Orang
-   * Proses:
-   * 1. Ambil info pesan (untuk arsip & path file)
-   * 2. Arsip ke tabel message_archives (Audit Log)
-   * 3. Hapus file fisik di Storage (jika ada)
-   * 4. Hapus baris permanen dari tabel messages
-   */
   deleteMessageForAll: async (messageId: number) => {
-    // 1. Ambil data pesan dulu
     const { data: msg, error: fetchError } = await supabase
       .from('messages')
       .select('*')
@@ -55,28 +45,21 @@ export const chatService = {
     if (fetchError || !msg) throw new Error("Pesan tidak ditemukan atau sudah dihapus.");
 
     const messageData = msg as Message;
-
-    // 2. Arsipkan Pesan (ke service terpisah)
     await archiveService.archiveMessage(messageData);
 
-    // 3. Cleanup File di Storage jika ada
     if (messageData.file_url) {
        try {
            const urlObj = new URL(messageData.file_url);
            const pathParts = urlObj.pathname.split(`/${STORAGE_BUCKET}/`);
            if (pathParts.length > 1) {
                const filePath = pathParts[1]; 
-               // Hapus file fisik untuk menghemat storage
-               await supabase.storage
-                  .from(STORAGE_BUCKET)
-                  .remove([decodeURIComponent(filePath)]);
+               await supabase.storage.from(STORAGE_BUCKET).remove([decodeURIComponent(filePath)]);
            }
        } catch (e) {
            console.warn("Error parsing file URL saat delete (File mungkin sudah hilang):", e);
        }
     }
 
-    // 4. Hard Delete dari Database
     const { error: deleteError } = await supabase
       .from('messages')
       .delete()
@@ -85,7 +68,6 @@ export const chatService = {
     if (deleteError) throw deleteError;
   },
 
-  // Hapus pesan untuk diri sendiri (Hide - Masuk ke tabel deleted_messages)
   deleteMessageForMe: async (messageId: number, userId: string) => {
     const { error } = await supabase
       .from('deleted_messages')
@@ -101,17 +83,20 @@ export const chatService = {
   },
 
   fetchMessages: async (roomId: string, currentUserId: string) => {
-    // Fetch pesan utama
+    // Fetch pesan utama DENGAN JOIN ke pesan yang di-reply DAN JOIN ke story
     const { data: messages, error } = await supabase
       .from('messages')
-      .select('*')
+      .select(`
+        *, 
+        reply_to_message:messages!reply_to_id(id, content, user_email, file_type),
+        story:stories(id, media_url, media_type, caption)
+      `)
       .eq('room_id', roomId)
       .order('created_at', { ascending: true })
       .limit(100);
 
     if (error) throw error;
 
-    // Filter pesan yang di-hide (Delete for Me)
     let hiddenSet = new Set<number>();
     try {
       const { data: deletedIds } = await supabase
@@ -124,16 +109,38 @@ export const chatService = {
         hiddenSet = new Set(deletedIds.map(d => d.message_id));
       }
     } catch (e) {
-      // Ignore error if table doesn't exist yet
+      // Ignore
     }
 
     return messages.filter(m => !hiddenSet.has(m.id)) as Message[];
   },
 
+  // Fetch 3 Media Terakhir untuk Profil User (Mirip Instagram/Whatsapp Info)
+  fetchUserMedia: async (targetUserId: string, roomId?: string) => {
+    let query = supabase
+        .from('messages')
+        .select('id, file_url, file_type, created_at')
+        .eq('user_id', targetUserId)
+        .in('file_type', ['image', 'video'])
+        .order('created_at', { ascending: false })
+        .limit(3);
+
+    // Jika roomId ada, ambil media dari chat spesifik ini saja. 
+    // Jika tidak (misal public profile), ambil dari mana saja (atau batasi public room).
+    // Disini kita batasi ke roomId jika ada demi privasi.
+    if (roomId && roomId !== 'public') {
+        query = query.eq('room_id', roomId);
+    }
+
+    const { data, error } = await query;
+    if (error) return [];
+    return data;
+  },
+
   exportChatToText: (messages: Message[]) => {
     const textContent = messages.map(m => {
         const time = new Date(m.created_at).toLocaleString('id-ID');
-        const sender = m.user_email.split('@')[0];
+        const sender = m.user_email?.split('@')[0] || 'Unknown';
         const content = m.content || '[File/Gambar]';
         return `[${time}] ${sender}: ${content}`;
     }).join('\n');

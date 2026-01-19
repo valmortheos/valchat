@@ -6,8 +6,9 @@ export const userService = {
   // Menggunakan UPSERT untuk menangani race condition antara Frontend dan DB Trigger
   createProfile: async (userId: string, email: string, fullName: string, avatarUrl: string, username?: string) => {
     
-    // Fallback username jika undefined
-    const finalUsername = username || (email.split('@')[0] + Math.floor(Math.random() * 1000));
+    // Fallback username jika undefined, dan safe check email
+    const emailPrefix = email ? email.split('@')[0] : 'user';
+    const finalUsername = username || (emailPrefix + Math.floor(Math.random() * 1000));
 
     // Gunakan upsert: Jika ID sudah ada (karena trigger), update datanya. Jika belum, insert baru.
     const { error } = await supabase.from('profiles').upsert({
