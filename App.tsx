@@ -1,10 +1,9 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from './services/supabaseClient';
 import { chatService } from './services/chatService';
 import { userService } from './services/userService';
 import { storyService } from './services/features/storyService';
-import { presenceService } from './services/features/presenceService';
-import { Session, RealtimeChannel } from '@supabase/supabase-js';
+import { Session } from '@supabase/supabase-js';
 import { Auth } from './components/Auth';
 import { MessageBubble } from './components/MessageBubble';
 import { ChatInput } from './components/ChatInput';
@@ -18,6 +17,10 @@ import { Loader } from './components/ui/Loader';
 import { APP_NAME, DEFAULT_AVATAR } from './constants';
 import { notificationService } from './services/features/notificationService';
 import { NotificationPanel } from './components/ui/NotificationPanel';
+
+// HOOKS
+import { useRealtimeChat } from './hooks/useRealtimeChat';
+import { useGlobalRealtime } from './hooks/useGlobalRealtime';
 
 // STORY COMPONENTS
 import { StoryList } from './components/story/StoryList';
@@ -51,7 +54,6 @@ const App: React.FC = () => {
 
   // Typing & Online State
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
-  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   
   // STORY STATE
   const [stories, setStories] = useState<GroupedStories[]>([]);
@@ -59,8 +61,8 @@ const App: React.FC = () => {
   const [isCreatingStory, setIsCreatingStory] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const channelRef = useRef<RealtimeChannel | null>(null);
-  const globalPresenceRef = useRef<RealtimeChannel | null>(null); 
+
+  // --- INITIALIZATION ---
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -94,40 +96,85 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // GLOBAL PRESENCE (ONLINE STATUS)
+  // --- GLOBAL REALTIME (ONLINE USERS & SIDEBAR UPDATES) ---
+  
+  // Callback saat ada pesan baru dari room MANAPUN (untuk update sidebar)
+  const handleGlobalNewMessage = useCallback((msg: Message) => {
+      if (!session?.user) return;
+      
+      // Jika pesan bukan dari room yang sedang aktif, update recent chats
+      if (msg.room_id !== activeRoomId) {
+          fetchRecentChats(session.user.id);
+          notificationService.notify(
+              `Pesan Baru: ${msg.user_email.split('@')[0]}`,
+              msg.content || 'Mengirim file',
+              'message'
+          );
+      } else {
+          // Jika pesan dari room aktif TAPI dari orang lain (Insert event), 
+          // ini akan dihandle oleh useRealtimeChat, tapi kita refresh sidebar juga biar urutannya naik
+          fetchRecentChats(session.user.id);
+      }
+  }, [activeRoomId, session]);
+
+  const { onlineUsers } = useGlobalRealtime({
+      userId: session?.user?.id || null,
+      onNewMessageGlobal: handleGlobalNewMessage
+  });
+
+  // Load Stories Periodically
   useEffect(() => {
-    if (!session?.user) return;
-
-    const globalChannel = supabase.channel('global_presence', {
-        config: { presence: { key: session.user.id } }
-    });
-
-    globalChannel
-        .on('presence', { event: 'sync' }, () => {
-            const newState = globalChannel.presenceState();
-            const onlineIds = new Set(Object.keys(newState));
-            setOnlineUsers(onlineIds);
-        })
-        .subscribe(async (status) => {
-            if (status === 'SUBSCRIBED') {
-                await presenceService.trackPresence(globalChannel, session.user.id);
-            }
-        });
-
-    globalPresenceRef.current = globalChannel;
-
-    userService.updateLastSeen(session.user.id);
-    refreshStories(session.user.id);
-    const intervalId = setInterval(() => {
-        userService.updateLastSeen(session.user.id);
-        refreshStories(session.user.id);
-    }, 60000);
-
-    return () => {
-        clearInterval(intervalId);
-        supabase.removeChannel(globalChannel);
-    };
+      if (!session?.user) return;
+      refreshStories(session.user.id);
+      const interval = setInterval(() => refreshStories(session.user.id), 60000);
+      return () => clearInterval(interval);
   }, [session?.user?.id]);
+
+
+  // --- CHAT ROOM REALTIME ---
+
+  const handleMessageReceived = useCallback((newMsg: Message) => {
+      if (!session?.user) return;
+
+      // Reset typing indicator jika pesan datang dari partner
+      if (newMsg.user_id !== session.user.id) {
+          setIsPartnerTyping(false);
+          // Mark as read immediately if we are in the room
+          chatService.markMessagesAsRead([newMsg.id], session.user.id);
+      }
+
+      setMessages(prev => {
+          // Prevent duplicates (Optimistic UI vs Realtime Insert)
+          const exists = prev.find(m => m.id === newMsg.id);
+          if (exists) return prev;
+          
+          // Hapus pending message jika ada (biasanya ID pending pakai Date.now yg mungkin beda, 
+          // tapi kalau logic create message disamakan ID-nya akan lebih baik. 
+          // Disini kita append saja, filter pending dilakukan saat render/send)
+          return [...prev.filter(m => !m.isPending), newMsg];
+      });
+      setTimeout(scrollToBottom, 100);
+  }, [session?.user?.id]);
+
+  const handleMessageUpdated = useCallback((updatedMsg: Message) => {
+      setMessages(prev => prev.map(m => m.id === updatedMsg.id ? updatedMsg : m));
+  }, []);
+
+  const handleMessageDeleted = useCallback((deletedId: number) => {
+      setMessages(prev => prev.filter(m => m.id !== deletedId));
+  }, []);
+
+  const { sendTypingEvent } = useRealtimeChat({
+      roomId: view === 'chat' ? activeRoomId : null,
+      userId: session?.user?.id || null,
+      onMessageReceived: handleMessageReceived,
+      onMessageUpdated: handleMessageUpdated,
+      onMessageDeleted: handleMessageDeleted,
+      onTypingChange: setIsPartnerTyping
+  });
+
+  
+  // --- HELPERS ---
 
   const refreshStories = async (userId: string) => {
       const data = await storyService.fetchStories(userId);
@@ -165,10 +212,15 @@ const App: React.FC = () => {
         const { data } = await supabase.from('last_messages').select('*').or(`user_id.eq.${userId},receiver_id.eq.${userId}`);
         if (data) {
              const chats: ChatSession[] = [];
-             for (const msg of data as Message[]) {
+             // Sort agar yang terbaru diatas
+             const sortedData = (data as Message[]).sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+             
+             for (const msg of sortedData) {
                  if (msg.room_id === 'public') continue;
                  const partnerId = msg.user_id === userId ? msg.receiver_id : msg.user_id;
                  if (!partnerId) continue;
+                 
+                 // Fetch partner profile (bisa dioptimasi dengan join query nanti)
                  const { data: partnerProfile } = await supabase.from('profiles').select('*').eq('id', partnerId).single();
                  if (partnerProfile) {
                      chats.push({ room_id: msg.room_id, partner: partnerProfile, last_message: msg });
@@ -182,83 +234,20 @@ const App: React.FC = () => {
   const openChat = (partner: UserProfile | null) => {
       if (!session?.user) return;
       const roomId = partner ? getRoomId(session.user.id, partner.id) : 'public';
+      
       setActivePartner(partner);
       setActiveRoomId(roomId);
       setView('chat');
+      
+      // Load initial messages
+      chatService.fetchMessages(roomId, session.user.id).then(msgs => {
+          setMessages(msgs);
+          setTimeout(scrollToBottom, 100);
+      });
+      
       setIsSelectionMode(false);
       setSelectedMsgIds(new Set());
       setIsPartnerTyping(false); 
-  };
-
-  // ROOM LOGIC: MESSAGES, TYPING, READ RECEIPTS
-  useEffect(() => {
-      if (!session || !activeRoomId || !userProfile) return;
-      
-      const loadMessages = async () => {
-          const msgs = await chatService.fetchMessages(activeRoomId, session.user.id);
-          setMessages(msgs);
-          setTimeout(scrollToBottom, 100);
-
-          const unreadMsgIds = msgs.filter(m => m.user_id !== session.user.id).map(m => m.id);
-          if(unreadMsgIds.length > 0) {
-             chatService.markMessagesAsRead(unreadMsgIds, session.user.id);
-          }
-      };
-
-      loadMessages();
-
-      const channel = supabase.channel(`room:${activeRoomId}`);
-
-      channel.on(
-            'postgres_changes',
-            { event: '*', schema: 'public', table: 'messages', filter: `room_id=eq.${activeRoomId}` },
-            async (payload) => {
-                if (payload.eventType === 'UPDATE') {
-                    setMessages(prev => prev.map(m => m.id === payload.new.id ? payload.new as Message : m));
-                }
-                else if (payload.eventType === 'INSERT') {
-                    const newMsg = payload.new as Message;
-                    
-                    if (newMsg.user_id !== session.user.id) setIsPartnerTyping(false);
-
-                    if (newMsg.user_id !== session.user.id) {
-                        chatService.markMessagesAsRead([newMsg.id], session.user.id);
-                        if (document.visibilityState === 'hidden') {
-                           notificationService.notify(
-                             `Pesan Baru: ${newMsg.user_email.split('@')[0]}`,
-                             newMsg.content || 'Mengirim file',
-                             'message'
-                           );
-                        }
-                    }
-                    setMessages(prev => {
-                        const exists = prev.find(m => m.id === newMsg.id);
-                        if (exists) return prev;
-                        return [...prev.filter(m => !m.isPending), newMsg];
-                    });
-                    setTimeout(scrollToBottom, 100);
-                }
-                else if (payload.eventType === 'DELETE') {
-                    const deletedId = payload.old.id;
-                    setMessages(prev => prev.filter(m => m.id !== deletedId));
-                }
-            }
-        )
-        .on('broadcast', { event: 'typing' }, ({ payload }) => {
-            if (payload.userId !== session.user.id) {
-                setIsPartnerTyping(payload.isTyping);
-            }
-        })
-        .subscribe();
-      
-      channelRef.current = channel;
-      return () => { supabase.removeChannel(channel); };
-  }, [activeRoomId, session, userProfile]);
-
-  const handleTypingEvent = (isTyping: boolean) => {
-      if (channelRef.current && session) {
-          presenceService.sendTypingEvent(channelRef.current, session.user.id, isTyping);
-      }
   };
 
   const handleToggleSelection = (msgId: number) => {
@@ -295,6 +284,7 @@ const App: React.FC = () => {
   const handleSendMessage = async (content: string, fileUrl?: string, fileType?: 'image' | 'file') => {
     if (!session?.user || !userProfile) return;
 
+    // Optimistic Update
     const tempId = Date.now();
     const newMessage: Message = {
         id: tempId,
@@ -328,9 +318,8 @@ const App: React.FC = () => {
         notificationService.notify('Gagal mengirim pesan', error.message, 'error');
         setMessages(prev => prev.filter(m => m.id !== tempId));
     } else {
-        if (activePartner && !recentChats.find(c => c.room_id === activeRoomId)) {
-            fetchRecentChats(userProfile.id);
-        }
+        // Refresh sidebar agar chat naik ke atas
+        fetchRecentChats(userProfile.id);
     }
   };
 
@@ -345,6 +334,8 @@ const App: React.FC = () => {
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  // --- RENDER ---
 
   if (loading) return <div className="h-screen bg-gray-50 dark:bg-telegram-dark"><Loader /></div>;
   if (!session) return <Auth />;
@@ -489,7 +480,7 @@ const App: React.FC = () => {
                 onSendMessage={(text) => handleSendMessage(text)} 
                 onOpenFile={(file) => setPreviewFile(file)}
                 onOpenCamera={() => setIsCameraOpen(true)}
-                onTyping={handleTypingEvent} 
+                onTyping={(t) => sendTypingEvent(t)} 
                 disabled={false} 
              />
          )}
