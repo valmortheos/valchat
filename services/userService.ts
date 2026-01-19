@@ -2,36 +2,30 @@ import { supabase } from './supabaseClient';
 import { UserProfile } from '../types';
 
 export const userService = {
-  // Membuat profil baru
+  // Membuat atau Memperbarui profil
+  // Menggunakan UPSERT untuk menangani race condition antara Frontend dan DB Trigger
   createProfile: async (userId: string, email: string, fullName: string, avatarUrl: string, username?: string) => {
-    // 1. Cek dulu apakah profil sudah ada
-    const { data: existing } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', userId)
-        .single();
-
-    if (existing) return; // Jika sudah ada, skip
-
-    // 2. Gunakan username yang dikirim, atau generate dari email jika kosong
+    
+    // Fallback username jika undefined
     const finalUsername = username || (email.split('@')[0] + Math.floor(Math.random() * 1000));
 
-    // 3. Insert ke public.profiles
-    const { error } = await supabase.from('profiles').insert({
+    // Gunakan upsert: Jika ID sudah ada (karena trigger), update datanya. Jika belum, insert baru.
+    const { error } = await supabase.from('profiles').upsert({
       id: userId,
       email: email,
       full_name: fullName,
       username: finalUsername,
       avatar_url: avatarUrl,
       last_seen: new Date().toISOString()
-    });
+    }, { onConflict: 'id' });
 
     if (error) {
-        console.error("Gagal membuat profil:", error);
-        // Jangan throw error fatal, agar user tetap bisa masuk (nanti bisa edit profil)
-        // Kecuali duplicate username (error 23505)
+        console.error("Gagal sync profil:", error);
+        // Abaikan error duplicate username jika kita hanya mencoba sync otomatis
         if (error.code === '23505') {
-             throw new Error("Username sudah terpakai saat pembuatan profil.");
+             console.warn("Username conflict, user mungkin harus menggantinya di settings.");
+        } else {
+             throw error;
         }
     }
   },

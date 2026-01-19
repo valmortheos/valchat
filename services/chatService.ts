@@ -1,5 +1,7 @@
 import { supabase } from './supabaseClient';
 import { Message } from '../types';
+import { archiveService } from './features/archiveService';
+import { STORAGE_BUCKET } from '../constants';
 
 export const chatService = {
   // Tandai pesan sudah dibaca
@@ -12,29 +14,21 @@ export const chatService = {
       read_at: new Date().toISOString()
     }));
 
-    // Gunakan try-catch untuk menangani potensi error koneksi atau tabel missing
     try {
       const { error } = await supabase.from('read_receipts').upsert(updates, { onConflict: 'message_id,user_id' });
-      if (error) {
-         // Log message spesifik agar tidak muncul [object Object]
-         console.warn('Gagal menandai pesan terbaca (mungkin tabel read_receipts belum dibuat?):', error.message);
-      }
+      if (error) console.warn('Gagal read receipt:', error.message);
     } catch (err) {
       console.error('Unexpected error marking read:', err);
     }
   },
 
-  // Ambil detail siapa saja yang sudah baca pesan ini
   getReadReceipts: async (messageId: number) => {
     const { data, error } = await supabase
       .from('read_receipts')
       .select('user_id, read_at, profiles:user_id(full_name, avatar_url)')
       .eq('message_id', messageId);
     
-    if (error) {
-      console.warn('Gagal load read receipts:', error.message);
-      return [];
-    }
+    if (error) return [];
     return data.map((item: any) => ({
       user_id: item.user_id,
       read_at: item.read_at,
@@ -42,40 +36,73 @@ export const chatService = {
     }));
   },
 
-  // Hapus pesan untuk semua orang (Soft Delete)
+  /**
+   * HARD DELETE untuk Semua Orang
+   * 1. Ambil info pesan
+   * 2. Arsip ke tabel message_archives
+   * 3. Hapus file di Storage (jika ada)
+   * 4. Hapus baris dari tabel messages
+   */
   deleteMessageForAll: async (messageId: number) => {
-    const { error } = await supabase
+    // 1. Ambil data pesan dulu sebelum dihapus untuk keperluan arsip & cleanup file
+    const { data: msg, error: fetchError } = await supabase
       .from('messages')
-      .update({ is_deleted: true, content: null, file_url: null })
+      .select('*')
+      .eq('id', messageId)
+      .single();
+    
+    if (fetchError || !msg) throw new Error("Pesan tidak ditemukan atau sudah dihapus.");
+
+    const messageData = msg as Message;
+
+    // 2. Arsipkan Pesan (Masuk ke tabel archive, bukan deleted_messages yg punya FK)
+    await archiveService.archiveMessage(messageData);
+
+    // 3. Cleanup File di Storage jika ada
+    if (messageData.file_url) {
+       try {
+           // Ekstrak path file dari URL
+           const urlObj = new URL(messageData.file_url);
+           const pathParts = urlObj.pathname.split(`/${STORAGE_BUCKET}/`);
+           if (pathParts.length > 1) {
+               const filePath = pathParts[1]; // decodeURI tidak wajib jika supabase client handle raw string
+               const { error: storageError } = await supabase.storage
+                  .from(STORAGE_BUCKET)
+                  .remove([decodeURIComponent(filePath)]);
+               
+               if (storageError) console.warn("Gagal hapus file fisik:", storageError.message);
+           }
+       } catch (e) {
+           console.warn("Error parsing file URL saat delete:", e);
+       }
+    }
+
+    // 4. Hard Delete dari Database
+    const { error: deleteError } = await supabase
+      .from('messages')
+      .delete()
       .eq('id', messageId);
-    if (error) throw error;
+
+    if (deleteError) throw deleteError;
   },
 
-  // Hapus pesan untuk diri sendiri (Hide)
+  // Hapus pesan untuk diri sendiri (Hide - Masuk ke tabel deleted_messages yg lama)
   deleteMessageForMe: async (messageId: number, userId: string) => {
     const { error } = await supabase
       .from('deleted_messages')
       .insert({ message_id: messageId, user_id: userId });
     
-    if (error) {
-       console.error("Gagal hapus pesan untuk saya:", error.message);
-       throw error;
-    }
+    if (error) throw error;
   },
 
-  // Bulk Delete For Me
   deleteMultipleMessagesForMe: async (messageIds: number[], userId: string) => {
     const inserts = messageIds.map(id => ({ message_id: id, user_id: userId }));
     const { error } = await supabase.from('deleted_messages').insert(inserts);
-    if (error) {
-      console.error("Gagal bulk delete:", error.message);
-      throw error;
-    }
+    if (error) throw error;
   },
 
-  // Fetch messages dengan filter 'deleted_messages' untuk user saat ini
   fetchMessages: async (roomId: string, currentUserId: string) => {
-    // 1. Fetch pesan utama
+    // Fetch pesan utama
     const { data: messages, error } = await supabase
       .from('messages')
       .select('*')
@@ -85,36 +112,30 @@ export const chatService = {
 
     if (error) throw error;
 
-    // 2. Fetch daftar pesan yang dihapus oleh user ini
-    // Kita handle error dengan soft fail agar chat tetap muncul meski fitur delete rusak/tabel hilang
+    // Filter pesan yang di-hide (Delete for Me)
     let hiddenSet = new Set<number>();
-    
     try {
-      const { data: deletedIds, error: deletedError } = await supabase
+      const { data: deletedIds } = await supabase
         .from('deleted_messages')
         .select('message_id')
         .eq('user_id', currentUserId)
         .in('message_id', messages.map(m => m.id));
       
-      if (!deletedError && deletedIds) {
+      if (deletedIds) {
         hiddenSet = new Set(deletedIds.map(d => d.message_id));
-      } else if (deletedError && deletedError.code !== 'PGRST116') { // Ignore empty result error
-         console.warn("Gagal cek pesan terhapus:", deletedError.message);
       }
     } catch (e) {
-      console.warn("Tabel deleted_messages mungkin belum ada.");
+      // Ignore error if table not exists
     }
 
-    // 3. Filter pesan
     return messages.filter(m => !hiddenSet.has(m.id)) as Message[];
   },
 
-  // Export Chat ke format text untuk di download
   exportChatToText: (messages: Message[]) => {
     const textContent = messages.map(m => {
         const time = new Date(m.created_at).toLocaleString('id-ID');
         const sender = m.user_email.split('@')[0];
-        const content = m.is_deleted ? '[Pesan Dihapus]' : (m.content || '[File/Gambar]');
+        const content = m.content || '[File/Gambar]'; // Tidak ada lagi [Pesan Dihapus] karena hard delete
         return `[${time}] ${sender}: ${content}`;
     }).join('\n');
 

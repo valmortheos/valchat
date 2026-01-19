@@ -67,14 +67,10 @@ const App: React.FC = () => {
   // Heartbeat: Update Last Seen setiap 60 detik agar status online akurat
   useEffect(() => {
     if (!session?.user) return;
-    
-    // Update immediately on mount/login
     userService.updateLastSeen(session.user.id);
-
     const intervalId = setInterval(() => {
         userService.updateLastSeen(session.user.id);
     }, 60000);
-
     return () => clearInterval(intervalId);
   }, [session]);
 
@@ -88,47 +84,35 @@ const App: React.FC = () => {
         return;
     }
 
-    // Subscribe ke perubahan tabel profiles khusus untuk partner ini
     const channel = supabase.channel(`status_partner_${activePartner.id}`)
         .on(
             'postgres_changes',
             { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${activePartner.id}` },
             (payload) => {
                 const updatedProfile = payload.new as UserProfile;
-                setActivePartner(updatedProfile); // Update UI Header
+                setActivePartner(updatedProfile); 
             }
         )
         .subscribe();
     
     partnerStatusRef.current = channel;
-
-    return () => {
-        supabase.removeChannel(channel);
-    };
+    return () => { supabase.removeChannel(channel); };
   }, [activePartner?.id, view]);
 
 
   const initUser = async (session: Session) => {
       try {
-          // 1. Coba ambil profil
           let profile = await userService.getProfile(session.user.id);
-          
-          // 2. Jika profil belum ada (Baru daftar), buat profil otomatis
-          if (!profile) {
+          if (!profile || !profile.username) {
               const userMeta = session.user.user_metadata || {};
               const email = session.user.email!;
-              
-              // Ambil data dari metadata (yang dikirim saat signUp) atau fallback
               const fullName = userMeta.full_name || email.split('@')[0];
-              const username = userMeta.username || undefined;
+              const username = userMeta.username || undefined; 
               const avatarUrl = userMeta.avatar_url || DEFAULT_AVATAR;
               
               await userService.createProfile(session.user.id, email, fullName, avatarUrl, username);
-              
-              // Fetch ulang setelah create
               profile = await userService.getProfile(session.user.id);
           }
-
           if (profile) {
             setUserProfile(profile);
             await fetchRecentChats(session.user.id);
@@ -167,8 +151,6 @@ const App: React.FC = () => {
       setActivePartner(partner);
       setActiveRoomId(roomId);
       setView('chat');
-      
-      // Reset selection mode when changing chat
       setIsSelectionMode(false);
       setSelectedMsgIds(new Set());
   };
@@ -209,6 +191,11 @@ const App: React.FC = () => {
                     });
                     setTimeout(scrollToBottom, 100);
                 }
+                // Handle Hard Delete: Pesan dihapus dari DB, jadi kita hapus dari state UI
+                else if (payload.eventType === 'DELETE') {
+                    const deletedId = payload.old.id;
+                    setMessages(prev => prev.filter(m => m.id !== deletedId));
+                }
             }
         )
         .subscribe();
@@ -217,7 +204,6 @@ const App: React.FC = () => {
       return () => { supabase.removeChannel(channel); };
   }, [activeRoomId, session, userProfile]);
 
-  // Selection Logic
   const handleToggleSelection = (msgId: number) => {
     const newSelected = new Set(selectedMsgIds);
     if (newSelected.has(msgId)) {
@@ -237,6 +223,7 @@ const App: React.FC = () => {
      const ids = Array.from(selectedMsgIds);
      try {
          await chatService.deleteMultipleMessagesForMe(ids, session.user.id);
+         // Hapus lokal agar UI responsif
          setMessages(prev => prev.filter(m => !selectedMsgIds.has(m.id)));
          setIsSelectionMode(false);
          setSelectedMsgIds(new Set());
@@ -250,7 +237,6 @@ const App: React.FC = () => {
      setSelectedMsgIds(new Set());
   };
 
-  // Main Send Function
   const handleSendMessage = async (content: string, fileUrl?: string, fileType?: 'image' | 'file') => {
     if (!session?.user || !userProfile) return;
 
@@ -293,6 +279,7 @@ const App: React.FC = () => {
     }
   };
 
+  // Callback delete untuk satu pesan (dari Context Menu Bubble)
   const handleDeleteCallback = async (msgId: number) => {
       if (!session) return;
       try {
@@ -351,7 +338,8 @@ const App: React.FC = () => {
                              </span>
                         </div>
                         <p className="text-sm text-gray-500 dark:text-gray-400 truncate flex items-center gap-1">
-                            {chat.last_message?.is_deleted ? <span className="italic opacity-70">🚫 Pesan dihapus</span> : (chat.last_message?.content || (chat.last_message?.file_type === 'image' ? '📷 Foto' : '📎 Berkas'))}
+                            {/* Logika display pesan dihapus tidak lagi relevan karena Hard Delete */}
+                            {chat.last_message?.content || (chat.last_message?.file_type === 'image' ? '📷 Foto' : '📎 Berkas')}
                         </p>
                     </div>
                 </div>
@@ -374,7 +362,6 @@ const App: React.FC = () => {
       {/* Main Chat Area */}
       <div className={`${view === 'home' || view === 'settings' || view === 'search' ? 'hidden md:flex' : 'flex'} flex-1 flex-col h-full relative bg-gray-100 dark:bg-telegram-dark w-full max-w-full overflow-hidden`}>
          
-         {/* Modular Chat Header */}
          <ChatHeader 
             activePartner={activePartner}
             onBack={() => setView('home')}
@@ -386,10 +373,8 @@ const App: React.FC = () => {
             onForwardSelected={handleForwardMessages}
          />
 
-         {/* Chat Background */}
          <div className="absolute inset-0 bg-repeat opacity-5 pointer-events-none z-0 mt-16" style={{ backgroundImage: "url('https://web.telegram.org/img/bg_0.png')", backgroundSize: '400px' }}></div>
 
-         {/* Messages List */}
          <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 z-0 space-y-1 pt-20 pb-4 w-full">
             {messages.length === 0 ? (
                 <div className="h-full flex flex-col items-center justify-center text-gray-400 opacity-60 animate-fade-in">
@@ -415,7 +400,6 @@ const App: React.FC = () => {
             <div ref={messagesEndRef} />
          </div>
 
-         {/* Chat Input - Hide when selecting */}
          {!isSelectionMode && (
              <ChatInput 
                 onSendMessage={(text) => handleSendMessage(text)} 
@@ -427,7 +411,6 @@ const App: React.FC = () => {
          )}
       </div>
 
-      {/* MODALS */}
       {previewFile && (
           <MediaPreview 
             file={previewFile} 
