@@ -3,6 +3,7 @@ import { supabase } from './services/supabaseClient';
 import { chatService } from './services/chatService';
 import { userService } from './services/userService';
 import { storyService } from './services/features/storyService';
+import { presenceService } from './services/features/presenceService';
 import { Session, RealtimeChannel } from '@supabase/supabase-js';
 import { Auth } from './components/Auth';
 import { MessageBubble } from './components/MessageBubble';
@@ -48,8 +49,9 @@ const App: React.FC = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
 
-  // Typing Indicator State
+  // Typing & Online State
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   
   // STORY STATE
   const [stories, setStories] = useState<GroupedStories[]>([]);
@@ -58,7 +60,7 @@ const App: React.FC = () => {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const partnerStatusRef = useRef<RealtimeChannel | null>(null);
+  const globalPresenceRef = useRef<RealtimeChannel | null>(null); 
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -92,20 +94,40 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Heartbeat & Stories Fetch
+  // GLOBAL PRESENCE (ONLINE STATUS)
   useEffect(() => {
     if (!session?.user) return;
-    
-    // Initial fetch
+
+    const globalChannel = supabase.channel('global_presence', {
+        config: { presence: { key: session.user.id } }
+    });
+
+    globalChannel
+        .on('presence', { event: 'sync' }, () => {
+            const newState = globalChannel.presenceState();
+            const onlineIds = new Set(Object.keys(newState));
+            setOnlineUsers(onlineIds);
+        })
+        .subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                await presenceService.trackPresence(globalChannel, session.user.id);
+            }
+        });
+
+    globalPresenceRef.current = globalChannel;
+
     userService.updateLastSeen(session.user.id);
     refreshStories(session.user.id);
-
     const intervalId = setInterval(() => {
         userService.updateLastSeen(session.user.id);
-        refreshStories(session.user.id); // Refresh stories periodically
+        refreshStories(session.user.id);
     }, 60000);
-    return () => clearInterval(intervalId);
-  }, [session]);
+
+    return () => {
+        clearInterval(intervalId);
+        supabase.removeChannel(globalChannel);
+    };
+  }, [session?.user?.id]);
 
   const refreshStories = async (userId: string) => {
       const data = await storyService.fetchStories(userId);
@@ -165,10 +187,10 @@ const App: React.FC = () => {
       setView('chat');
       setIsSelectionMode(false);
       setSelectedMsgIds(new Set());
-      setIsPartnerTyping(false); // Reset typing status when switching room
+      setIsPartnerTyping(false); 
   };
 
-  // ROOM LOGIC: MESSAGES & TYPING INDICATOR
+  // ROOM LOGIC: MESSAGES, TYPING, READ RECEIPTS
   useEffect(() => {
       if (!session || !activeRoomId || !userProfile) return;
       
@@ -185,10 +207,8 @@ const App: React.FC = () => {
 
       loadMessages();
 
-      // SETUP REALTIME CHANNEL
       const channel = supabase.channel(`room:${activeRoomId}`);
 
-      // 1. Listen for Database Changes (Messages)
       channel.on(
             'postgres_changes',
             { event: '*', schema: 'public', table: 'messages', filter: `room_id=eq.${activeRoomId}` },
@@ -199,7 +219,6 @@ const App: React.FC = () => {
                 else if (payload.eventType === 'INSERT') {
                     const newMsg = payload.new as Message;
                     
-                    // Stop indicator typing jika pesan masuk
                     if (newMsg.user_id !== session.user.id) setIsPartnerTyping(false);
 
                     if (newMsg.user_id !== session.user.id) {
@@ -225,9 +244,7 @@ const App: React.FC = () => {
                 }
             }
         )
-        // 2. Listen for Broadcast (Typing Indicator)
         .on('broadcast', { event: 'typing' }, ({ payload }) => {
-            // Cek apakah event dari user lain
             if (payload.userId !== session.user.id) {
                 setIsPartnerTyping(payload.isTyping);
             }
@@ -238,15 +255,9 @@ const App: React.FC = () => {
       return () => { supabase.removeChannel(channel); };
   }, [activeRoomId, session, userProfile]);
 
-
-  // Handler: Send Broadcast Typing
   const handleTypingEvent = (isTyping: boolean) => {
-      if (channelRef.current) {
-          channelRef.current.send({
-              type: 'broadcast',
-              event: 'typing',
-              payload: { userId: session?.user.id, isTyping }
-          });
+      if (channelRef.current && session) {
+          presenceService.sendTypingEvent(channelRef.current, session.user.id, isTyping);
       }
   };
 
@@ -341,16 +352,18 @@ const App: React.FC = () => {
   const unreadNotifs = notifications.filter(n => !n.read).length;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-100 dark:bg-telegram-dark font-sans text-gray-900 dark:text-gray-100">
+    <div className="flex h-screen overflow-hidden bg-gray-100 dark:bg-telegram-dark font-sans text-gray-900 dark:text-gray-100 relative">
       
-      {/* Sidebar */}
-      <div className={`${view === 'chat' ? 'hidden md:flex' : 'flex'} flex-col w-full md:w-96 bg-white dark:bg-telegram-darkSecondary border-r border-gray-200 dark:border-black/20 z-20`}>
+      {/* Sidebar - HIDDEN ON MOBILE WHEN CHAT IS ACTIVE */}
+      <div className={`
+          flex-col w-full md:w-96 bg-white dark:bg-telegram-darkSecondary border-r border-gray-200 dark:border-black/20 z-20 transition-all duration-300
+          ${view === 'chat' ? 'hidden md:flex' : 'flex'}
+      `}>
         {/* Header Sidebar */}
         <div className="p-4 bg-telegram-primary text-white shadow-md z-10 sticky top-0">
            <div className="flex justify-between items-center mb-4">
               <span className="font-bold text-xl tracking-tight">{APP_NAME}</span>
               <div className="flex gap-2">
-                 {/* Notification Toggle */}
                  <button onClick={() => { setShowNotifPanel(true); notificationService.markAllAsRead(); }} className="p-2 hover:bg-white/20 rounded-full transition relative">
                     <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
                     {unreadNotifs > 0 && (
@@ -391,7 +404,12 @@ const App: React.FC = () => {
             </div>
             {recentChats.map(chat => (
                 <div key={chat.room_id} onClick={() => openChat(chat.partner)} className={`p-4 border-b border-gray-100 dark:border-white/5 cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5 transition flex gap-4 items-center ${activeRoomId === chat.room_id ? 'bg-telegram-primary/5 dark:bg-white/5 border-l-4 border-l-telegram-primary' : ''}`}>
-                    <img src={chat.partner.avatar_url || DEFAULT_AVATAR} className="w-14 h-14 rounded-2xl bg-gray-200 object-cover shadow-sm" alt="avatar" />
+                    <div className="relative">
+                        <img src={chat.partner.avatar_url || DEFAULT_AVATAR} className="w-14 h-14 rounded-2xl bg-gray-200 object-cover shadow-sm" alt="avatar" />
+                        {onlineUsers.has(chat.partner.id) && (
+                            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-white dark:border-telegram-darkSecondary rounded-full"></div>
+                        )}
+                    </div>
                     <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-baseline mb-1">
                              <h3 className="font-bold text-gray-800 dark:text-gray-100 truncate">{chat.partner.full_name || chat.partner.username}</h3>
@@ -420,8 +438,11 @@ const App: React.FC = () => {
       {view === 'settings' && userProfile && <Settings user={userProfile} onClose={() => setView('home')} onUpdate={() => initUser(session!)} />}
       {view === 'search' && userProfile && <UserSearch currentUserId={userProfile.id} onSelectUser={(u) => openChat(u)} onClose={() => setView('home')} />}
 
-      {/* Main Chat Area */}
-      <div className={`${view === 'home' || view === 'settings' || view === 'search' ? 'hidden md:flex' : 'flex'} flex-1 flex-col h-full relative bg-gray-100 dark:bg-telegram-dark w-full max-w-full overflow-hidden`}>
+      {/* Main Chat Area - SLIDE IN ANIMATION ON MOBILE */}
+      <div className={`
+          flex-1 flex-col h-full relative bg-gray-100 dark:bg-telegram-dark w-full max-w-full overflow-hidden
+          ${view === 'chat' ? 'flex animate-slide-in-right' : 'hidden md:flex'}
+      `}>
          
          <ChatHeader 
             activePartner={activePartner}
@@ -433,6 +454,7 @@ const App: React.FC = () => {
             onDeleteSelected={handleBulkDelete}
             onForwardSelected={handleForwardMessages}
             isTyping={isPartnerTyping}
+            isOnline={activePartner ? onlineUsers.has(activePartner.id) : false}
          />
 
          <div className="absolute inset-0 bg-repeat opacity-5 pointer-events-none z-0 mt-16" style={{ backgroundImage: "url('https://web.telegram.org/img/bg_0.png')", backgroundSize: '400px' }}></div>

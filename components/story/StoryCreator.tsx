@@ -15,6 +15,7 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
   const [text, setText] = useState('');
   const [bgColor, setBgColor] = useState(COLORS[0]);
   const [caption, setCaption] = useState('');
+  const [privacy, setPrivacy] = useState<'public' | 'private'>('public'); // Default Public
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -29,11 +30,11 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
       try {
           if (mode === 'text') {
               if(!text.trim()) return;
-              await storyService.createStory(userId, 'text', null, text, bgColor);
+              await storyService.createStory(userId, 'text', null, text, bgColor, privacy);
           } else {
               if(!file) return;
               const type = file.type.startsWith('video') ? 'video' : 'image';
-              await storyService.createStory(userId, type, file, caption);
+              await storyService.createStory(userId, type, file, caption, undefined, privacy);
           }
           onSuccess();
           onClose();
@@ -47,7 +48,7 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
   return (
     <div className="fixed inset-0 z-[60] bg-black flex flex-col animate-fade-in">
         {/* Header */}
-        <div className="flex justify-between items-center p-4 text-white z-10">
+        <div className="flex justify-between items-center p-4 text-white z-10 bg-gradient-to-b from-black/50 to-transparent">
             <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>
             <div className="flex gap-4">
                 <button onClick={() => { setMode('media'); setFile(null); }} className={`text-sm font-bold ${mode === 'media' ? 'text-telegram-primary' : 'text-gray-400'}`}>MEDIA</button>
@@ -69,7 +70,7 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
                         className="w-full bg-transparent text-white text-center text-3xl font-bold placeholder-white/50 outline-none resize-none"
                         rows={5}
                     />
-                    <div className="absolute bottom-20 flex gap-2 overflow-x-auto p-2 max-w-full">
+                    <div className="absolute bottom-28 flex gap-2 overflow-x-auto p-2 max-w-full">
                         {COLORS.map(c => (
                             <button key={c} onClick={() => setBgColor(c)} className={`w-8 h-8 rounded-full border-2 ${bgColor === c ? 'border-white' : 'border-transparent'}`} style={{ backgroundColor: c }} />
                         ))}
@@ -97,18 +98,37 @@ export const StoryCreator: React.FC<StoryCreatorProps> = ({ userId, onClose, onS
             )}
         </div>
 
-        {/* Caption for Media */}
-        {mode === 'media' && file && (
-            <div className="p-4 bg-black/80">
+        {/* Footer: Caption & Privacy */}
+        <div className="p-4 bg-black/80 flex flex-col gap-3">
+             {mode === 'media' && file && (
                 <input 
                     type="text" 
                     value={caption} 
                     onChange={e => setCaption(e.target.value)} 
                     placeholder="Tambah caption..." 
-                    className="w-full bg-transparent text-white placeholder-gray-500 outline-none"
+                    className="w-full bg-transparent text-white placeholder-gray-500 outline-none border-b border-gray-700 pb-2"
                 />
-            </div>
-        )}
+             )}
+             
+             {/* Privacy Selector */}
+             <div className="flex items-center justify-between text-white text-sm">
+                 <span className="text-gray-400">Siapa yang bisa melihat?</span>
+                 <div className="flex bg-gray-800 rounded-lg p-1">
+                     <button 
+                        onClick={() => setPrivacy('public')}
+                        className={`px-3 py-1 rounded-md transition ${privacy === 'public' ? 'bg-telegram-primary text-white' : 'text-gray-400'}`}
+                     >
+                         Publik
+                     </button>
+                     <button 
+                        onClick={() => setPrivacy('private')}
+                        className={`px-3 py-1 rounded-md transition ${privacy === 'private' ? 'bg-red-500 text-white' : 'text-gray-400'}`}
+                     >
+                         Privat
+                     </button>
+                 </div>
+             </div>
+        </div>
     </div>
   );
 };

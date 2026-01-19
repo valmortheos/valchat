@@ -47,21 +47,36 @@ export interface AppNotification {
 }
 
 // STORY TYPES
+export interface StoryView {
+  viewer_id: string;
+  viewed_at: string;
+  viewer?: UserProfile;
+}
+
 export interface Story {
   id: number;
   user_id: string;
   media_type: 'image' | 'video' | 'text';
   media_url?: string;
   caption?: string;
-  background_color?: string; // For text stories
+  background_color?: string; 
   created_at: string;
   expires_at: string;
-  user?: UserProfile; // Joined data
+  privacy: 'public' | 'private'; 
+  user?: UserProfile; 
+  views?: StoryView[]; // Joined views
+  view_count?: number;
 }
 
-// Untuk dikelompokkan per user di UI
 export interface GroupedStories {
   user: UserProfile;
   stories: Story[];
-  hasUnseen: boolean; // Logic sederhana: jika timestamp terakhir > waktu user melihat story
+  hasUnseen: boolean; 
+}
+
+// PRESENCE TYPE
+export interface UserPresence {
+  user_id: string;
+  online_at: string;
+  status: 'online' | 'offline';
 }

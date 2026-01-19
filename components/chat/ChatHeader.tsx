@@ -2,17 +2,19 @@ import React, { useState } from 'react';
 import { UserProfile } from '../../types';
 import { DEFAULT_AVATAR } from '../../constants';
 import { chatService } from '../../services/chatService';
+import { presenceService } from '../../services/features/presenceService';
 
 interface ChatHeaderProps {
   activePartner: UserProfile | null;
   onBack: () => void;
-  messages: any[]; // Untuk export
+  messages: any[];
   isSelectionMode: boolean;
   selectedCount: number;
   onCancelSelection: () => void;
   onDeleteSelected: () => void;
   onForwardSelected: () => void; 
-  isTyping?: boolean; // NEW PROP
+  isTyping?: boolean;
+  isOnline?: boolean; // Status Realtime
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({ 
@@ -24,7 +26,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onCancelSelection,
   onDeleteSelected,
   onForwardSelected,
-  isTyping = false
+  isTyping = false,
+  isOnline = false
 }) => {
   const [showMenu, setShowMenu] = useState(false);
 
@@ -41,7 +44,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
   const handleDeleteAll = () => {
      if(confirm("Apakah Anda yakin ingin menghapus riwayat chat ini? (Hanya berlaku untuk Anda)")) {
-        alert("Fitur 'Clear History' akan segera hadir. Gunakan fitur select bubble untuk menghapus pesan spesifik.");
+        alert("Fitur 'Clear History' akan segera hadir.");
      }
      setShowMenu(false);
   };
@@ -73,7 +76,6 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       );
   }
 
-  // Tampilan Header Normal
   return (
     <header className="absolute top-0 left-0 right-0 z-10 glass border-b border-gray-200 dark:border-white/5 p-3 flex items-center justify-between shadow-sm transition-all">
        <div className="flex items-center gap-3 overflow-hidden">
@@ -85,14 +87,23 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           
           {activePartner ? (
               <div className="flex items-center gap-3 cursor-pointer min-w-0">
-                  <img src={activePartner.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full object-cover shadow-sm shrink-0" alt="partner" />
+                  <div className="relative">
+                      <img src={activePartner.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full object-cover shadow-sm shrink-0" alt="partner" />
+                      {isOnline && (
+                          <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white dark:border-telegram-darkSecondary rounded-full"></div>
+                      )}
+                  </div>
                   <div className="min-w-0">
                       <h2 className="font-bold text-gray-800 dark:text-white leading-tight truncate">{activePartner.full_name}</h2>
-                      {/* TYPING INDICATOR LOGIC */}
+                      
                       {isTyping ? (
                           <p className="text-xs text-telegram-primary font-bold italic animate-pulse">sedang mengetik...</p>
+                      ) : isOnline ? (
+                          <p className="text-xs text-telegram-primary font-bold">Online</p>
                       ) : (
-                          <p className="text-xs text-telegram-primary font-bold tracking-wide truncate">@{activePartner.username}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                             {presenceService.formatLastSeen(activePartner.last_seen)}
+                          </p>
                       )}
                   </div>
               </div>
@@ -104,7 +115,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                       {isTyping ? (
                           <p className="text-xs text-telegram-primary font-bold italic animate-pulse">seseorang mengetik...</p>
                       ) : (
-                          <p className="text-xs text-gray-500 truncate">Online</p>
+                          <p className="text-xs text-gray-500">Komunitas Online</p>
                       )}
                   </div>
               </div>
