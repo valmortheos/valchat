@@ -14,25 +14,31 @@ interface StoryViewerProps {
 
 export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNextGroup, onPrevGroup, currentUserId }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [progress, setProgress] = useState(0);
+  const [progress, setProgress] = useState(0); // 0 to 100
   const [isPaused, setIsPaused] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false); // Buffer state
-  const [showViewers, setShowViewers] = useState(false); // Modal viewers
+  const [isLoaded, setIsLoaded] = useState(false); 
+  const [showViewers, setShowViewers] = useState(false); 
   const [viewersList, setViewersList] = useState<StoryView[]>([]);
   
-  // Reply State
   const [replyText, setReplyText] = useState('');
   const [sendingReply, setSendingReply] = useState(false);
   
   const videoRef = useRef<HTMLVideoElement>(null);
-  
   const currentStory = group.stories[currentIndex];
-  const DURATION = 5000; 
+  const DURATION = 5000; // 5 seconds default
   const isOwner = group.user.id === currentUserId;
 
-  // Reset state saat pindah story
+  // Reset state on story change
   useEffect(() => {
     setProgress(0);
+    // Use requestAnimationFrame to ensure DOM updated before starting animation
+    requestAnimationFrame(() => {
+         if (currentStory.media_type !== 'video') {
+             // Start animation
+             setProgress(100);
+         }
+    });
+    
     setIsLoaded(currentStory.media_type === 'text'); 
     setShowViewers(false);
     setReplyText('');
@@ -42,26 +48,20 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
     }
   }, [currentIndex, group, isOwner, currentUserId, currentStory]);
 
+  // Timer Logic for Next Story
   useEffect(() => {
-    if (isPaused || !isLoaded || showViewers || replyText.trim().length > 0) return; // Pause saat mengetik reply
+    if (isPaused || !isLoaded || showViewers || replyText.trim().length > 0) return;
 
-    let interval: any;
-    if (currentStory.media_type === 'video') {
-       // Handled by onTimeUpdate
-    } else {
-       const step = 100 / (DURATION / 50); 
-       interval = setInterval(() => {
-           setProgress(prev => {
-               if (prev >= 100) {
-                   handleNext();
-                   return 0;
-               }
-               return prev + step;
-           });
-       }, 50);
+    let timeout: any;
+
+    if (currentStory.media_type !== 'video') {
+        timeout = setTimeout(() => {
+            handleNext();
+        }, DURATION);
     }
-    return () => clearInterval(interval);
-  }, [currentIndex, currentStory, isPaused, isLoaded, showViewers, replyText]);
+
+    return () => clearTimeout(timeout);
+  }, [currentIndex, isPaused, isLoaded, showViewers, replyText]);
 
   const handleNext = () => {
       if (currentIndex < group.stories.length - 1) {
@@ -106,16 +106,10 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
       if (!replyText.trim()) return;
       setSendingReply(true);
       try {
-          // 1. Tentukan Room ID (Private antara aku dan pemilik story)
           const room_id = [currentUserId, group.user.id].sort().join('_');
-          
-          // 2. Fetch data userku untuk meta
-          const { data: { user } } = await supabase.auth.getUser();
           const { data: myProfile } = await supabase.from('profiles').select('*').eq('id', currentUserId).single();
-          
           if (!myProfile) throw new Error("Profil tidak ditemukan");
 
-          // 3. Insert Pesan dengan story_id
           await supabase.from('messages').insert({
               content: replyText,
               user_id: currentUserId,
@@ -126,9 +120,8 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
               story_id: currentStory.id
           });
           
-          // 4. Update last_messages (optional, biasanya handled by trigger but good for optimistic)
           setReplyText('');
-          onClose(); // Tutup story setelah reply agar user bisa cek chat
+          onClose(); 
           alert('Balasan terkirim!');
       } catch (e: any) {
           alert('Gagal mengirim balasan: ' + e.message);
@@ -144,9 +137,11 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
             {group.stories.map((s, idx) => (
                 <div key={s.id} className="h-1 bg-white/30 flex-1 rounded-full overflow-hidden">
                     <div 
-                        className="h-full bg-white transition-all duration-100 ease-linear"
+                        className="h-full bg-white ease-linear"
                         style={{ 
-                            width: idx < currentIndex ? '100%' : idx === currentIndex ? `${progress}%` : '0%' 
+                            width: idx < currentIndex ? '100%' : idx === currentIndex ? `${progress}%` : '0%',
+                            transitionProperty: 'width',
+                            transitionDuration: idx === currentIndex && currentStory.media_type !== 'video' && !isPaused ? `${DURATION}ms` : '0ms'
                         }}
                     />
                 </div>
@@ -202,13 +197,12 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
                              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" /></svg>
                         )}
                     </button>
-                    {/* Love Reaction Shortcut (Mockup) */}
                     <button className="p-3 text-2xl hover:scale-125 transition">❤️</button>
                 </div>
              )}
         </div>
 
-        {/* Buffering Indicator */}
+        {/* Buffering */}
         {!isLoaded && (
             <div className="absolute inset-0 z-10 flex items-center justify-center">
                 <div className="w-10 h-10 border-4 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -222,7 +216,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
             <div className="w-1/3 h-full" onClick={handleNext} />
         </div>
 
-        {/* Content Display */}
+        {/* Content */}
         <div className="w-full h-full flex items-center justify-center bg-gray-900">
             {currentStory.media_type === 'text' ? (
                 <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center" style={{ backgroundColor: currentStory.background_color || '#333' }}>
@@ -246,11 +240,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
                         }}
                         onEnded={handleNext}
                     />
-                    {currentStory.caption && (
-                         <div className="absolute bottom-20 left-0 right-0 p-4 bg-black/50 text-white text-center pb-16">
-                             {currentStory.caption}
-                         </div>
-                    )}
+                    {currentStory.caption && <div className="absolute bottom-20 left-0 right-0 p-4 bg-black/50 text-white text-center pb-16">{currentStory.caption}</div>}
                 </div>
             ) : (
                 <div className="relative w-full h-full flex items-center justify-center bg-black">
@@ -260,16 +250,12 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
                         alt="story" 
                         onLoad={() => setIsLoaded(true)}
                     />
-                    {currentStory.caption && (
-                         <div className="absolute bottom-20 left-0 right-0 p-4 bg-black/50 text-white text-center pb-16">
-                             {currentStory.caption}
-                         </div>
-                    )}
+                    {currentStory.caption && <div className="absolute bottom-20 left-0 right-0 p-4 bg-black/50 text-white text-center pb-16">{currentStory.caption}</div>}
                 </div>
             )}
         </div>
 
-        {/* Viewers Modal */}
+        {/* Viewers */}
         {showViewers && (
             <div className="absolute inset-x-0 bottom-0 top-1/2 bg-white dark:bg-gray-800 rounded-t-2xl z-50 animate-slide-up flex flex-col shadow-2xl">
                 <div className="flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-700">
@@ -279,19 +265,15 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
                     </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                    {viewersList.length === 0 ? (
-                        <p className="text-center text-gray-500 mt-10">Belum ada yang melihat story ini.</p>
-                    ) : (
-                        viewersList.map((v, i) => (
-                            <div key={i} className="flex items-center gap-3">
-                                <img src={v.viewer?.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full bg-gray-200" alt="av" />
-                                <div>
-                                    <p className="font-bold text-sm text-gray-800 dark:text-white">{v.viewer?.full_name || 'User'}</p>
-                                    <p className="text-xs text-gray-500">{new Date(v.viewed_at).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'})}</p>
-                                </div>
+                    {viewersList.length === 0 ? <p className="text-center text-gray-500 mt-10">Belum ada yang melihat story ini.</p> : viewersList.map((v, i) => (
+                        <div key={i} className="flex items-center gap-3">
+                            <img src={v.viewer?.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full bg-gray-200" alt="av" />
+                            <div>
+                                <p className="font-bold text-sm text-gray-800 dark:text-white">{v.viewer?.full_name || 'User'}</p>
+                                <p className="text-xs text-gray-500">{new Date(v.viewed_at).toLocaleTimeString('id-ID', {hour:'2-digit', minute:'2-digit'})}</p>
                             </div>
-                        ))
-                    )}
+                        </div>
+                    ))}
                 </div>
             </div>
         )}

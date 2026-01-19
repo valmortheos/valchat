@@ -5,6 +5,7 @@ import { DEFAULT_AVATAR } from '../constants';
 import { AvatarUpload } from './profile/AvatarUpload';
 import { friendService } from '../services/features/friendService';
 import { UserSearch } from './UserSearch';
+import { ProfileGalleryEditor } from './settings/ProfileGalleryEditor';
 
 interface SettingsProps {
   user: UserProfile;
@@ -74,6 +75,12 @@ export const Settings: React.FC<SettingsProps> = ({ user, onClose, onUpdate }) =
       } catch (e) { alert("Gagal menghapus"); }
   };
 
+  const handleLogout = async () => {
+      if(confirm("Yakin ingin keluar?")) {
+          await supabase.auth.signOut();
+      }
+  };
+
   return (
     <div className="absolute inset-0 z-50 bg-white dark:bg-telegram-darkSecondary flex flex-col animate-fade-in-up">
       {/* Header */}
@@ -120,8 +127,15 @@ export const Settings: React.FC<SettingsProps> = ({ user, onClose, onUpdate }) =
                     <label className="text-xs font-bold text-gray-500 uppercase">Bio</label>
                     <textarea value={bio} onChange={(e) => setBio(e.target.value)} className="w-full bg-gray-100 dark:bg-black/20 rounded-lg p-3 mt-1 outline-none dark:text-white h-24" />
                 </div>
-                <button onClick={handleSave} disabled={loading} className="w-full bg-telegram-primary text-white py-3 rounded-xl font-bold hover:bg-telegram-secondary disabled:opacity-50">
+
+                <ProfileGalleryEditor userId={user.id} />
+
+                <button onClick={handleSave} disabled={loading} className="w-full bg-telegram-primary text-white py-3 rounded-xl font-bold hover:bg-telegram-secondary disabled:opacity-50 mt-4">
                     {loading ? 'Menyimpan...' : 'Simpan Perubahan'}
+                </button>
+                
+                <button onClick={handleLogout} className="w-full border border-red-500 text-red-500 py-3 rounded-xl font-bold hover:bg-red-50 dark:hover:bg-red-900/10 mt-2">
+                    Keluar (Logout)
                 </button>
              </div>
         ) : (

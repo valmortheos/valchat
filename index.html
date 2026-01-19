@@ -16,14 +16,15 @@
           extend: {
             colors: {
               telegram: {
-                primary: '#2AABEE',
+                primary: '#2AABEE', // Light Mode Blue
+                darkPrimary: '#1E3A8A', // Deep Blue for Dark Mode
                 secondary: '#229ED9',
-                dark: '#17212B',
-                darkSecondary: '#242F3D',
+                dark: '#0F172A', // Darker background (Slate 900)
+                darkSecondary: '#1E293B', // Secondary dark (Slate 800)
                 messageIn: '#FFFFFF',
                 messageOut: '#EEFFDE',
-                messageInDark: '#1F2936',
-                messageOutDark: '#2B5278'
+                messageInDark: '#1E293B',
+                messageOutDark: '#172554' // Deep Blue bubble
               }
             },
             fontFamily: {
@@ -67,7 +68,7 @@
       body {
         font-family: 'Inter', sans-serif;
         overscroll-behavior-y: none;
-        overflow-x: hidden; /* Prevent horizontal scroll global */
+        overflow-x: hidden; 
       }
       ::-webkit-scrollbar { width: 4px; }
       ::-webkit-scrollbar-track { background: transparent; }
@@ -80,19 +81,16 @@
         -webkit-backdrop-filter: blur(12px);
       }
       .dark .glass {
-        background: rgba(36, 47, 61, 0.85);
-      }
-      
-      /* Highlight animation for reply jumping */
-      @keyframes highlightPulse {
-        0% { background-color: rgba(42, 171, 238, 0.0); }
-        20% { background-color: rgba(42, 171, 238, 0.3); }
-        100% { background-color: rgba(42, 171, 238, 0.0); }
+        background: rgba(30, 41, 59, 0.85); /* Darker glass */
       }
       
       .highlight-bubble {
         animation: highlightPulse 1.5s ease-out;
-        border-radius: 0.5rem;
+      }
+      @keyframes highlightPulse {
+        0% { background-color: rgba(42, 171, 238, 0.0); }
+        20% { background-color: rgba(42, 171, 238, 0.3); }
+        100% { background-color: rgba(42, 171, 238, 0.0); }
       }
     </style>
   <script type="importmap">

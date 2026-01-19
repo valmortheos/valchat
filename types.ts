@@ -17,7 +17,7 @@ export interface Message {
     user_email: string;
     file_type?: 'image' | 'file' | null;
   };
-  story_id?: number | null; // New field for Story Reply
+  story_id?: number | null;
   story?: {
     id: number;
     media_url?: string;
@@ -35,13 +35,38 @@ export interface UserProfile {
   bio?: string;
   last_seen?: string;
   updated_at?: string; 
+  connection_status?: 'connected' | 'pending' | 'none' | 'received'; // UI Helper
 }
 
 export interface ChatSession {
   room_id: string;
-  partner: UserProfile;
+  partner: UserProfile; // Jika personal chat, partner adalah user. Jika group, partner adalah GroupInfo (diakali)
   last_message?: Message;
   unread_count?: number;
+  is_group?: boolean; // New
+  group_info?: Group; // New
+}
+
+export interface Group {
+    id: string;
+    name: string;
+    avatar_url?: string;
+    created_by: string;
+    created_at: string;
+}
+
+export interface Connection {
+    id: number;
+    user_id: string;
+    friend_id: string;
+    status: 'pending' | 'accepted';
+    friend?: UserProfile;
+}
+
+export interface ProfileGalleryItem {
+    id: number;
+    media_url: string;
+    created_at: string;
 }
 
 export interface ReadReceipt {
@@ -58,6 +83,8 @@ export interface AppNotification {
   timestamp: Date;
   read: boolean;
   link?: string;
+  action?: 'group_invite' | 'connection_request'; // Actionable notifications
+  action_id?: string; // ID untuk accept/reject
 }
 
 // STORY TYPES

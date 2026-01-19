@@ -3,6 +3,7 @@ import { supabase } from './services/supabaseClient';
 import { chatService } from './services/chatService';
 import { userService } from './services/userService';
 import { storyService } from './services/features/storyService';
+import { groupService } from './services/features/groupService';
 import { Session } from '@supabase/supabase-js';
 import { Auth } from './components/Auth';
 import { MessageBubble } from './components/chat/MessageBubble';
@@ -12,18 +13,17 @@ import { UserSearch } from './components/UserSearch';
 import { ChatHeader } from './components/chat/ChatHeader';
 import { MediaPreview } from './components/chat/MediaPreview';
 import { CameraCapture } from './components/chat/CameraCapture';
-import { UserProfileViewer } from './components/profile/UserProfileViewer'; // NEW
-import { Message, UserProfile, ChatSession, AppNotification, GroupedStories } from './types';
+import { UserProfileViewer } from './components/profile/UserProfileViewer';
+import { CreateGroupModal } from './components/group/CreateGroupModal';
+import { Message, UserProfile, ChatSession, AppNotification, GroupedStories, Group } from './types';
 import { Loader } from './components/ui/Loader';
 import { APP_NAME, DEFAULT_AVATAR } from './constants';
 import { notificationService } from './services/features/notificationService';
 import { NotificationPanel } from './components/ui/NotificationPanel';
 
-// HOOKS
 import { useRealtimeChat } from './hooks/useRealtimeChat';
 import { useGlobalRealtime } from './hooks/useGlobalRealtime';
 
-// STORY COMPONENTS
 import { StoryList } from './components/story/StoryList';
 import { StoryViewer } from './components/story/StoryViewer';
 import { StoryCreator } from './components/story/StoryCreator';
@@ -34,6 +34,7 @@ export const App: React.FC = () => {
   
   const [view, setView] = useState<'home' | 'chat' | 'settings' | 'search'>('home');
   const [activePartner, setActivePartner] = useState<UserProfile | null>(null);
+  // activeRoomId bisa 'public', 'userid1_userid2', atau 'group_UUID'
   const [activeRoomId, setActiveRoomId] = useState<string>('public');
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -50,17 +51,15 @@ export const App: React.FC = () => {
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
 
-  // REPLY STATE
   const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
-
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
   
   const [stories, setStories] = useState<GroupedStories[]>([]);
   const [viewingStoryGroup, setViewingStoryGroup] = useState<GroupedStories | null>(null);
   const [isCreatingStory, setIsCreatingStory] = useState(false);
   
-  // PROFILE VIEWER STATE
   const [viewingProfile, setViewingProfile] = useState<UserProfile | null>(null);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -122,53 +121,29 @@ export const App: React.FC = () => {
       return () => clearInterval(interval);
   }, [session?.user?.id]);
 
-  // --- CRITICAL FIX: MANUAL HYDRATION FOR REALTIME MESSAGES ---
-  // Masalah: Supabase Realtime hanya mengirim row mentah, tidak ada JOIN ke reply_to_message.
-  // Solusi: Kita cari pesan induknya di state 'messages' yang ada, lalu tempel manual.
   const handleMessageReceived = useCallback((newMsg: Message) => {
       if (!session?.user) return;
-      
-      // Mark as read jika bukan kita pengirimnya
       if (newMsg.user_id !== session.user.id) {
           setIsPartnerTyping(false);
           chatService.markMessagesAsRead([newMsg.id], session.user.id);
       }
-
       setMessages(prev => {
-          // 1. Cek duplikasi (Penting untuk menghindari flicker Optimistic UI vs Realtime)
           const exists = prev.find(m => m.id === newMsg.id);
           if (exists) return prev;
-          
-          // 2. Hydration Logic (Memperbaiki Reply Bubble yang hilang)
-          // Jika pesan ini adalah reply (punya ID), TAPI data objectnya kosong (karena dari realtime)
           if (newMsg.reply_to_id && !newMsg.reply_to_message) {
               const originalMsg = prev.find(m => m.id === newMsg.reply_to_id);
-              
               if (originalMsg) {
-                  // Kita rekonstruksi data reply_to_message dari pesan yang ada di memori
                   newMsg.reply_to_message = {
                       id: originalMsg.id,
                       content: originalMsg.content,
                       user_email: originalMsg.user_email,
                       file_type: originalMsg.file_type
                   };
-              } else {
-                 // Fallback: Jika pesan asli tidak ada di list (misal chat lama sekali), 
-                 // UI akan menampilkan "Pesan tidak ditemukan" atau nama user saja jika kita fetch
-                 // Untuk performa, kita skip fetch single message di sini.
               }
           }
-          
-          // 3. Hydration Story Reply (Optional)
-          // Logika sama untuk story reply jika diperlukan di masa depan
-
-          // Hapus pesan pending (Optimistic) yang mungkin kita buat sebelumnya
-          // Kita filter semua pesan pending dari user ini agar tidak double
           const cleanPrev = prev.filter(m => !(m.isPending && m.content === newMsg.content));
-          
           return [...cleanPrev, newMsg];
       });
-      
       setTimeout(scrollToBottom, 100);
   }, [session?.user?.id]);
 
@@ -177,7 +152,6 @@ export const App: React.FC = () => {
   }, []);
 
   const handleMessageDeleted = useCallback((deletedId: number) => {
-      // Realtime delete: langsung hapus dari UI
       setMessages(prev => prev.filter(m => m.id !== deletedId));
   }, []);
 
@@ -200,7 +174,6 @@ export const App: React.FC = () => {
           let profile = await userService.getProfile(session.user.id);
           if (!profile || !profile.username) {
               const userMeta = session.user.user_metadata || {};
-              // Ensure email is a string, fallback to empty if missing (e.g. phone auth)
               const email = session.user.email || ''; 
               const fullName = userMeta.full_name || (email ? email.split('@')[0] : 'User');
               const username = userMeta.username || undefined; 
@@ -212,6 +185,7 @@ export const App: React.FC = () => {
           if (profile) {
             setUserProfile(profile);
             await fetchRecentChats(session.user.id);
+            checkPendingInvites(session.user.id);
           }
       } catch (error) {
           console.error("Error initializing user:", error);
@@ -220,17 +194,30 @@ export const App: React.FC = () => {
       }
   };
 
+  const checkPendingInvites = async (userId: string) => {
+      const invites = await groupService.getPendingInvites(userId);
+      if (invites.length > 0) {
+          invites.forEach(g => {
+             notificationService.notify("Undangan Grup", `Anda diundang ke grup "${g.name}"`, 'info');
+             // Auto accept for MVP or Show Dialog. For now auto-accept logic is manual.
+             if(confirm(`Anda diundang ke grup "${g.name}". Terima?`)) {
+                 groupService.acceptInvite(g.id, userId).then(() => fetchRecentChats(userId));
+             }
+          });
+      }
+  };
+
   const getRoomId = (userId1: string, userId2: string) => [userId1, userId2].sort().join('_');
 
   const fetchRecentChats = async (userId: string) => {
     try {
-        const { data } = await supabase.from('last_messages').select('*').or(`user_id.eq.${userId},receiver_id.eq.${userId}`);
-        if (data) {
-             const chats: ChatSession[] = [];
-             const sortedData = (data as Message[]).sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-             
+        const chats: ChatSession[] = [];
+        // 1. Fetch Personal Chats
+        const { data: pData } = await supabase.from('last_messages').select('*').or(`user_id.eq.${userId},receiver_id.eq.${userId}`);
+        if (pData) {
+             const sortedData = (pData as Message[]).sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
              for (const msg of sortedData) {
-                 if (msg.room_id === 'public') continue;
+                 if (msg.room_id === 'public' || !msg.room_id.includes('_')) continue; 
                  const partnerId = msg.user_id === userId ? msg.receiver_id : msg.user_id;
                  if (!partnerId) continue;
                  const { data: partnerProfile } = await supabase.from('profiles').select('*').eq('id', partnerId).single();
@@ -238,16 +225,52 @@ export const App: React.FC = () => {
                      chats.push({ room_id: msg.room_id, partner: partnerProfile, last_message: msg });
                  }
              }
-             setRecentChats(chats);
         }
+        
+        // 2. Fetch Group Chats
+        const groups = await groupService.getJoinedGroups(userId);
+        for(const grp of groups) {
+            // Fetch last message for group (not optimized view, manual query)
+            const { data: lastMsg } = await supabase.from('messages')
+                .select('*').eq('room_id', grp.id).order('created_at', {ascending: false}).limit(1).single();
+            
+            chats.push({
+                room_id: grp.id,
+                partner: { // Mock UserProfile structure for group display
+                    id: grp.id,
+                    full_name: grp.name,
+                    username: 'Group',
+                    avatar_url: grp.avatar_url || DEFAULT_AVATAR,
+                    email: ''
+                },
+                last_message: lastMsg || undefined,
+                is_group: true,
+                group_info: grp
+            });
+        }
+        
+        // Sort mix
+        chats.sort((a,b) => {
+            const tA = a.last_message ? new Date(a.last_message.created_at).getTime() : 0;
+            const tB = b.last_message ? new Date(b.last_message.created_at).getTime() : 0;
+            return tB - tA;
+        });
+
+        setRecentChats(chats);
     } catch (e) { console.warn("Load history failed", e); }
   };
 
-  const openChat = (partner: UserProfile | null) => {
+  const openChat = (partner: UserProfile | null, isGroup = false, groupInfo?: Group) => {
       if (!session?.user) return;
-      const roomId = partner ? getRoomId(session.user.id, partner.id) : 'public';
+      let roomId = 'public';
       
-      setActivePartner(partner);
+      if (isGroup && groupInfo) {
+          roomId = groupInfo.id;
+      } else if (partner) {
+          roomId = getRoomId(session.user.id, partner.id);
+      }
+      
+      setActivePartner(partner); // For group this contains group info mocked as user
       setActiveRoomId(roomId);
       setView('chat');
       setReplyToMessage(null); 
@@ -297,8 +320,6 @@ export const App: React.FC = () => {
     if (!session?.user || !userProfile) return;
 
     const tempId = Date.now();
-    // OPTIMISTIC MESSAGE
-    // Pesan ini langsung muncul di UI lengkap dengan reply_to_message nya.
     const newMessage: Message = {
         id: tempId,
         created_at: new Date().toISOString(),
@@ -306,7 +327,7 @@ export const App: React.FC = () => {
         user_id: userProfile.id,
         user_email: userProfile.username || userProfile.email,
         user_avatar: userProfile.avatar_url,
-        receiver_id: activePartner?.id,
+        receiver_id: activeRoomId === 'public' || activeRoomId.length > 30 ? undefined : activePartner?.id, // If uuid length usually > 30, it might be group
         room_id: activeRoomId,
         file_url: fileUrl,
         file_type: fileType,
@@ -315,7 +336,7 @@ export const App: React.FC = () => {
         reply_to_message: replyTo ? {
             id: replyTo.id,
             content: replyTo.content,
-            user_email: replyTo.user_email || 'User', // Ensure email is passed for formatting
+            user_email: replyTo.user_email || 'User', 
             file_type: replyTo.file_type
         } : undefined
     };
@@ -329,7 +350,7 @@ export const App: React.FC = () => {
         user_id: userProfile.id,
         user_email: userProfile.username || userProfile.email,
         user_avatar: userProfile.avatar_url,
-        receiver_id: activePartner?.id,
+        receiver_id: activeRoomId.includes('_') ? activePartner?.id : undefined, // Only set receiver for 1-1
         room_id: activeRoomId,
         file_url: fileUrl,
         file_type: fileType,
@@ -359,8 +380,6 @@ export const App: React.FC = () => {
   if (loading) return <div className="h-screen bg-gray-50 dark:bg-telegram-dark"><Loader /></div>;
   if (!session) return <Auth />;
 
-  const unreadNotifs = notifications.filter(n => !n.read).length;
-
   return (
     <div className="flex h-screen overflow-hidden bg-gray-100 dark:bg-telegram-dark font-sans text-gray-900 dark:text-gray-100 relative">
       
@@ -374,11 +393,8 @@ export const App: React.FC = () => {
            <div className="flex justify-between items-center mb-4">
               <span className="font-bold text-xl tracking-tight">{APP_NAME}</span>
               <div className="flex gap-2">
-                 <button onClick={() => { setShowNotifPanel(true); notificationService.markAllAsRead(); }} className="p-2 hover:bg-white/20 rounded-full transition relative">
-                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
-                    {unreadNotifs > 0 && (
-                        <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border border-telegram-primary"></span>
-                    )}
+                 <button onClick={() => { setShowCreateGroup(true) }} className="p-2 hover:bg-white/20 rounded-full transition" title="Buat Grup">
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
                  </button>
                  <button onClick={() => {setDarkMode(!darkMode); document.documentElement.classList.toggle('dark');}} className="p-2 hover:bg-white/20 rounded-full transition">
                     {darkMode ? <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg> : <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>}
@@ -412,10 +428,10 @@ export const App: React.FC = () => {
                 </div>
             </div>
             {recentChats.map(chat => (
-                <div key={chat.room_id} onClick={() => openChat(chat.partner)} className={`p-4 border-b border-gray-100 dark:border-white/5 cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5 transition flex gap-4 items-center ${activeRoomId === chat.room_id ? 'bg-telegram-primary/5 dark:bg-white/5 border-l-4 border-l-telegram-primary' : ''}`}>
+                <div key={chat.room_id} onClick={() => openChat(chat.partner, chat.is_group, chat.group_info)} className={`p-4 border-b border-gray-100 dark:border-white/5 cursor-pointer hover:bg-gray-50 dark:hover:bg-white/5 transition flex gap-4 items-center ${activeRoomId === chat.room_id ? 'bg-telegram-primary/5 dark:bg-white/5 border-l-4 border-l-telegram-primary' : ''}`}>
                     <div className="relative">
                         <img src={chat.partner.avatar_url || DEFAULT_AVATAR} className="w-14 h-14 rounded-2xl bg-gray-200 object-cover shadow-sm" alt="avatar" />
-                        {onlineUsers.has(chat.partner.id) && (
+                        {!chat.is_group && onlineUsers.has(chat.partner.id) && (
                             <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-green-500 border-2 border-white dark:border-telegram-darkSecondary rounded-full"></div>
                         )}
                     </div>
@@ -440,7 +456,6 @@ export const App: React.FC = () => {
                  <p className="font-bold text-gray-800 dark:text-white truncate">{userProfile?.full_name || 'User'}</p>
                  <p className="text-xs text-telegram-primary font-bold uppercase tracking-wider truncate">@{userProfile?.username || 'username'}</p>
              </div>
-             <button onClick={() => supabase.auth.signOut()} className="text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 p-2 rounded-xl transition"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" /></svg></button>
         </div>
       </div>
 
@@ -549,7 +564,7 @@ export const App: React.FC = () => {
           <StoryViewer 
              group={viewingStoryGroup}
              currentUserId={userProfile.id}
-             onClose={() => { setViewingStoryGroup(null); fetchRecentChats(userProfile.id); }} // Refresh chat list on close if replied
+             onClose={() => { setViewingStoryGroup(null); fetchRecentChats(userProfile.id); }} 
              onNextGroup={() => {
                  const currentIdx = stories.findIndex(g => g.user.id === viewingStoryGroup.user.id);
                  if (currentIdx < stories.length - 1) setViewingStoryGroup(stories[currentIdx + 1]);
@@ -568,6 +583,14 @@ export const App: React.FC = () => {
               currentRoomId={activeRoomId}
               onClose={() => setViewingProfile(null)}
               isOnline={onlineUsers.has(viewingProfile.id)}
+          />
+      )}
+
+      {showCreateGroup && userProfile && (
+          <CreateGroupModal 
+              creatorId={userProfile.id}
+              onClose={() => setShowCreateGroup(false)}
+              onGroupCreated={() => fetchRecentChats(userProfile.id)}
           />
       )}
 
