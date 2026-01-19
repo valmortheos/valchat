@@ -5,18 +5,33 @@ export interface Message {
   user_id: string;
   user_email: string;
   user_avatar?: string;
+  receiver_id?: string;
+  room_id: string;
   file_url?: string | null;
   file_type?: 'image' | 'file' | null;
+  isPending?: boolean;
+  is_deleted?: boolean; // Baru: Status hapus untuk semua
 }
 
 export interface UserProfile {
   id: string;
   email: string;
-  avatar_url?: string;
+  username?: string;
   full_name?: string;
+  avatar_url?: string;
+  bio?: string;
+  last_seen?: string;
 }
 
-export interface SupabaseConfig {
-  url: string;
-  anonKey: string;
+export interface ChatSession {
+  room_id: string;
+  partner: UserProfile;
+  last_message?: Message;
+  unread_count?: number;
+}
+
+export interface ReadReceipt {
+  user_id: string;
+  read_at: string;
+  user?: UserProfile; // Joined data
 }

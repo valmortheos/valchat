@@ -1,23 +1,43 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { supabase } from '../services/supabaseClient';
 import { STORAGE_BUCKET } from '../constants';
 
 interface ChatInputProps {
   onSendMessage: (content: string, fileUrl?: string, fileType?: 'image' | 'file') => Promise<void>;
+  onTyping: (isTyping: boolean) => void;
   disabled: boolean;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled }) => {
+export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, onTyping, disabled }) => {
   const [message, setMessage] = useState('');
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const typingTimeoutRef = useRef<any>(null);
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setMessage(e.target.value);
+    
+    // Logic Typing Indicator
+    onTyping(true);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    
+    // Stop typing indicator after 2 seconds of inactivity
+    typingTimeoutRef.current = setTimeout(() => {
+      onTyping(false);
+    }, 2000);
+  };
 
   const handleSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!message.trim()) return;
     
-    await onSendMessage(message);
-    setMessage('');
+    onTyping(false); // Stop typing immediately on send
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+
+    const msgToSend = message;
+    setMessage(''); // Clear immediately for UX
+    
+    await onSendMessage(msgToSend);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -90,7 +110,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, disabled })
         <div className="flex-1 relative">
             <textarea
                 value={message}
-                onChange={(e) => setMessage(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Ketik pesan..."
                 disabled={uploading || disabled}
