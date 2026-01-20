@@ -10,9 +10,10 @@ interface StoryViewerProps {
   onNextGroup: () => void;
   onPrevGroup: () => void;
   currentUserId: string;
+  onAddStory?: () => void; // New Prop
 }
 
-export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNextGroup, onPrevGroup, currentUserId }) => {
+export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNextGroup, onPrevGroup, currentUserId, onAddStory }) => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [progress, setProgress] = useState(0); // 0 to 100
   const [isPaused, setIsPaused] = useState(false);
@@ -31,26 +32,27 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
   // Reset state on story change
   useEffect(() => {
     setProgress(0);
-    // Use requestAnimationFrame to ensure DOM updated before starting animation
     requestAnimationFrame(() => {
-         if (currentStory.media_type !== 'video') {
+         if (currentStory && currentStory.media_type !== 'video') {
              // Start animation
              setProgress(100);
          }
     });
     
-    setIsLoaded(currentStory.media_type === 'text'); 
-    setShowViewers(false);
-    setReplyText('');
-    
-    if (!isOwner) {
-        storyService.recordView(currentStory.id, currentUserId);
+    if (currentStory) {
+        setIsLoaded(currentStory.media_type === 'text'); 
+        setShowViewers(false);
+        setReplyText('');
+        
+        if (!isOwner) {
+            storyService.recordView(currentStory.id, currentUserId);
+        }
     }
   }, [currentIndex, group, isOwner, currentUserId, currentStory]);
 
   // Timer Logic for Next Story
   useEffect(() => {
-    if (isPaused || !isLoaded || showViewers || replyText.trim().length > 0) return;
+    if (!currentStory || isPaused || !isLoaded || showViewers || replyText.trim().length > 0) return;
 
     let timeout: any;
 
@@ -61,7 +63,7 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
     }
 
     return () => clearTimeout(timeout);
-  }, [currentIndex, isPaused, isLoaded, showViewers, replyText]);
+  }, [currentIndex, isPaused, isLoaded, showViewers, replyText, currentStory]);
 
   const handleNext = () => {
       if (currentIndex < group.stories.length - 1) {
@@ -130,6 +132,8 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
       }
   };
 
+  if (!currentStory) return null;
+
   return (
     <div className="fixed inset-0 z-[60] bg-black flex flex-col items-center justify-center animate-scale-in">
         {/* Progress Bars */}
@@ -156,6 +160,17 @@ export const StoryViewer: React.FC<StoryViewerProps> = ({ group, onClose, onNext
                  <p className="text-white/70 text-xs">{new Date(currentStory.created_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
              </div>
         </div>
+
+        {/* ADD STORY BUTTON (Owner only) */}
+        {isOwner && onAddStory && (
+             <button 
+                onClick={(e) => { e.stopPropagation(); onAddStory(); }}
+                className="absolute top-20 left-4 z-30 flex items-center gap-2 bg-white/20 backdrop-blur-sm px-3 py-1.5 rounded-full hover:bg-white/30 transition text-white text-xs font-bold"
+             >
+                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+                 Add Story
+             </button>
+        )}
 
         {/* Close Button */}
         <button onClick={onClose} className="absolute top-6 right-4 z-30 text-white p-2 hover:bg-white/10 rounded-full"><svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg></button>

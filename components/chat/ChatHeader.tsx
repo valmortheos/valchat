@@ -13,7 +13,7 @@ interface ChatHeaderProps {
   onCancelSelection: () => void;
   onDeleteSelected: () => void;
   onForwardSelected: () => void; 
-  onOpenProfile: () => void; // New Prop
+  onOpenProfile: () => void;
   isTyping?: boolean;
   isOnline?: boolean; 
 }
@@ -79,16 +79,16 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   }
 
   return (
-    <header className="absolute top-0 left-0 right-0 z-10 glass border-b border-gray-200 dark:border-white/5 p-3 flex items-center justify-between shadow-sm transition-all">
+    <header className="absolute top-0 left-0 right-0 z-10 glass dark:bg-telegram-darkPrimary/90 border-b border-gray-200 dark:border-white/5 p-3 flex items-center justify-between shadow-sm transition-all">
        <div className="flex items-center gap-3 overflow-hidden">
-          <button onClick={onBack} className="md:hidden p-2 -ml-1 text-gray-600 dark:text-gray-300 rounded-full hover:bg-gray-100 dark:hover:bg-white/10">
+          <button onClick={onBack} className="md:hidden p-2 -ml-1 text-gray-600 dark:text-white rounded-full hover:bg-gray-100 dark:hover:bg-white/10">
               <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
           </button>
           
           {activePartner ? (
-              <div onClick={onOpenProfile} className="flex items-center gap-3 cursor-pointer min-w-0 hover:bg-gray-50 dark:hover:bg-white/5 p-1 rounded-lg transition pr-4">
+              <div onClick={onOpenProfile} className="flex items-center gap-3 cursor-pointer min-w-0 hover:bg-gray-50 dark:hover:bg-white/10 p-1 rounded-lg transition pr-4">
                   <div className="relative">
                       <img src={activePartner.avatar_url || DEFAULT_AVATAR} className="w-10 h-10 rounded-full object-cover shadow-sm shrink-0" alt="partner" />
                       {isOnline && (
@@ -99,11 +99,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                       <h2 className="font-bold text-gray-800 dark:text-white leading-tight truncate">{activePartner.full_name}</h2>
                       
                       {isTyping ? (
-                          <p className="text-xs text-telegram-primary font-bold italic animate-pulse">sedang mengetik...</p>
+                          <p className="text-xs text-telegram-primary dark:text-blue-300 font-bold italic animate-pulse">sedang mengetik...</p>
                       ) : isOnline ? (
-                          <p className="text-xs text-telegram-primary font-bold">Online</p>
+                          <p className="text-xs text-telegram-primary dark:text-blue-300 font-bold">Online</p>
                       ) : (
-                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                          <p className="text-xs text-gray-500 dark:text-gray-300 truncate">
                              {presenceService.formatLastSeen(activePartner.last_seen)}
                           </p>
                       )}
@@ -115,9 +115,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                    <div className="min-w-0">
                       <h2 className="font-bold text-gray-800 dark:text-white leading-tight truncate">Public Room</h2>
                       {isTyping ? (
-                          <p className="text-xs text-telegram-primary font-bold italic animate-pulse">seseorang mengetik...</p>
+                          <p className="text-xs text-telegram-primary dark:text-blue-300 font-bold italic animate-pulse">seseorang mengetik...</p>
                       ) : (
-                          <p className="text-xs text-gray-500">Komunitas Online</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-300">Komunitas Online</p>
                       )}
                   </div>
               </div>
@@ -126,7 +126,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
        {/* Menu Button */}
        <div className="relative">
-          <button onClick={() => setShowMenu(!showMenu)} className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-white/10 rounded-full">
+          <button onClick={() => setShowMenu(!showMenu)} className="p-2 text-gray-600 dark:text-white hover:bg-gray-100 dark:hover:bg-white/10 rounded-full">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
               </svg>

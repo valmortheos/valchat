@@ -5,15 +5,22 @@ import { STORAGE_BUCKET } from '../../constants';
 export const groupService = {
     createGroup: async (name: string, avatarFile: File | null, createdBy: string) => {
         let avatarUrl = null;
+        
+        // 1. Upload Avatar (Jika ada)
         if (avatarFile) {
-            const fileName = `group_${Date.now()}_${Math.random()}`;
-            const { error: uploadError } = await supabase.storage.from(STORAGE_BUCKET).upload(fileName, avatarFile);
-            if (!uploadError) {
+            try {
+                const fileName = `group_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+                const { error: uploadError } = await supabase.storage.from(STORAGE_BUCKET).upload(fileName, avatarFile);
+                if (uploadError) throw uploadError;
+                
                 const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(fileName);
                 avatarUrl = data.publicUrl;
+            } catch (e) {
+                console.warn("Gagal upload avatar grup, melanjutkan tanpa avatar.", e);
             }
         }
 
+        // 2. Insert Group Row
         const { data: group, error } = await supabase.from('groups').insert({
             name,
             avatar_url: avatarUrl,
@@ -22,13 +29,21 @@ export const groupService = {
 
         if (error) throw error;
 
-        // Add creator as member (admin/joined)
-        await supabase.from('group_members').insert({
+        // 3. Add Creator as Admin
+        // Menggunakan upsert untuk keamanan jika trigger DB sudah membuatnya (tergantung setup DB)
+        // Di sini kita insert manual
+        const { error: memberError } = await supabase.from('group_members').insert({
             group_id: group.id,
             user_id: createdBy,
             role: 'admin',
             status: 'joined'
         });
+
+        if (memberError) {
+            // Rollback (Hapus grup jika gagal add member creator) - Optional tapi recommended
+            await supabase.from('groups').delete().eq('id', group.id);
+            throw new Error("Gagal menambahkan admin grup: " + memberError.message);
+        }
 
         return group as Group;
     },

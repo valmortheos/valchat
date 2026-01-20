@@ -27,14 +27,18 @@ import { useGlobalRealtime } from './hooks/useGlobalRealtime';
 import { StoryList } from './components/story/StoryList';
 import { StoryViewer } from './components/story/StoryViewer';
 import { StoryCreator } from './components/story/StoryCreator';
+import { ForwardModal } from './components/chat/ForwardModal';
 
-export const App: React.FC = () => {
+// Context
+import { UIProvider, useUI } from './contexts/UIContext';
+
+// MAIN CONTENT COMPONENT (Separated to access Context)
+const MainApp: React.FC = () => {
   const [session, setSession] = useState<Session | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   
   const [view, setView] = useState<'home' | 'chat' | 'settings' | 'search'>('home');
   const [activePartner, setActivePartner] = useState<UserProfile | null>(null);
-  // activeRoomId bisa 'public', 'userid1_userid2', atau 'group_UUID'
   const [activeRoomId, setActiveRoomId] = useState<string>('public');
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -49,7 +53,8 @@ export const App: React.FC = () => {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   
   const [isSelectionMode, setIsSelectionMode] = useState(false);
-  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set());
+  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<number>>(new Set<number>());
+  const [showForwardModal, setShowForwardModal] = useState(false);
 
   const [replyToMessage, setReplyToMessage] = useState<Message | null>(null);
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
@@ -62,6 +67,9 @@ export const App: React.FC = () => {
   const [showCreateGroup, setShowCreateGroup] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // Use UI Context
+  const { showToast, confirm } = useUI();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -94,6 +102,17 @@ export const App: React.FC = () => {
         unsubNotif();
     };
   }, []);
+
+  useEffect(() => {
+      if(!session?.user) return;
+      const channel = supabase.channel('story_updates')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'stories' }, () => {
+              refreshStories(session.user.id);
+          })
+          .subscribe();
+
+      return () => { supabase.removeChannel(channel); };
+  }, [session?.user]);
 
   const handleGlobalNewMessage = useCallback((msg: Message) => {
       if (!session?.user) return;
@@ -130,6 +149,8 @@ export const App: React.FC = () => {
       setMessages(prev => {
           const exists = prev.find(m => m.id === newMsg.id);
           if (exists) return prev;
+          
+          // Hydrate nested data for reply (limited)
           if (newMsg.reply_to_id && !newMsg.reply_to_message) {
               const originalMsg = prev.find(m => m.id === newMsg.reply_to_id);
               if (originalMsg) {
@@ -199,10 +220,18 @@ export const App: React.FC = () => {
       if (invites.length > 0) {
           invites.forEach(g => {
              notificationService.notify("Undangan Grup", `Anda diundang ke grup "${g.name}"`, 'info');
-             // Auto accept for MVP or Show Dialog. For now auto-accept logic is manual.
-             if(confirm(`Anda diundang ke grup "${g.name}". Terima?`)) {
-                 groupService.acceptInvite(g.id, userId).then(() => fetchRecentChats(userId));
-             }
+             confirm({
+                 title: "Undangan Grup",
+                 message: `Anda diundang ke grup "${g.name}". Terima?`,
+                 confirmText: "Terima",
+                 cancelText: "Abaikan",
+                 onConfirm: () => {
+                     groupService.acceptInvite(g.id, userId).then(() => {
+                         fetchRecentChats(userId);
+                         showToast("Berhasil bergabung ke grup!", "success");
+                     });
+                 }
+             });
           });
       }
   };
@@ -212,7 +241,6 @@ export const App: React.FC = () => {
   const fetchRecentChats = async (userId: string) => {
     try {
         const chats: ChatSession[] = [];
-        // 1. Fetch Personal Chats
         const { data: pData } = await supabase.from('last_messages').select('*').or(`user_id.eq.${userId},receiver_id.eq.${userId}`);
         if (pData) {
              const sortedData = (pData as Message[]).sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -227,16 +255,14 @@ export const App: React.FC = () => {
              }
         }
         
-        // 2. Fetch Group Chats
         const groups = await groupService.getJoinedGroups(userId);
         for(const grp of groups) {
-            // Fetch last message for group (not optimized view, manual query)
             const { data: lastMsg } = await supabase.from('messages')
                 .select('*').eq('room_id', grp.id).order('created_at', {ascending: false}).limit(1).single();
             
             chats.push({
                 room_id: grp.id,
-                partner: { // Mock UserProfile structure for group display
+                partner: { 
                     id: grp.id,
                     full_name: grp.name,
                     username: 'Group',
@@ -249,7 +275,6 @@ export const App: React.FC = () => {
             });
         }
         
-        // Sort mix
         chats.sort((a,b) => {
             const tA = a.last_message ? new Date(a.last_message.created_at).getTime() : 0;
             const tB = b.last_message ? new Date(b.last_message.created_at).getTime() : 0;
@@ -270,7 +295,7 @@ export const App: React.FC = () => {
           roomId = getRoomId(session.user.id, partner.id);
       }
       
-      setActivePartner(partner); // For group this contains group info mocked as user
+      setActivePartner(partner); 
       setActiveRoomId(roomId);
       setView('chat');
       setReplyToMessage(null); 
@@ -286,7 +311,7 @@ export const App: React.FC = () => {
   };
 
   const handleToggleSelection = (msgId: number) => {
-    const newSelected = new Set(selectedMsgIds);
+    const newSelected = new Set<number>(selectedMsgIds);
     if (newSelected.has(msgId)) {
         newSelected.delete(msgId);
         if (newSelected.size === 0) setIsSelectionMode(false);
@@ -298,22 +323,62 @@ export const App: React.FC = () => {
   };
 
   const handleBulkDelete = async () => {
-     if(!confirm(`Hapus ${selectedMsgIds.size} pesan terpilih untuk Anda?`)) return;
-     if(!session) return;
-     const ids = Array.from(selectedMsgIds);
-     try {
-         await chatService.deleteMultipleMessagesForMe(ids, session.user.id);
-         setMessages(prev => prev.filter(m => !selectedMsgIds.has(m.id)));
-         setIsSelectionMode(false);
-         setSelectedMsgIds(new Set());
-     } catch(e) { alert("Gagal menghapus pesan"); }
+     confirm({
+         title: "Hapus Pesan",
+         message: `Hapus ${selectedMsgIds.size} pesan terpilih untuk Anda? (Pesan tidak akan terhapus untuk orang lain)`,
+         confirmText: "Hapus",
+         onConfirm: async () => {
+             if(!session) return;
+             const ids = Array.from(selectedMsgIds) as number[];
+             try {
+                 await chatService.deleteMultipleMessagesForMe(ids, session.user.id);
+                 setMessages(prev => prev.filter(m => !selectedMsgIds.has(m.id)));
+                 setIsSelectionMode(false);
+                 setSelectedMsgIds(new Set());
+                 showToast("Pesan dihapus.", "success");
+             } catch(e) { 
+                 showToast("Gagal menghapus pesan.", "error"); 
+             }
+         }
+     });
   };
 
   const handleForwardMessages = () => {
      if(selectedMsgIds.size === 0) return;
-     alert("Fitur Forward Pesan akan segera hadir!");
-     setIsSelectionMode(false);
-     setSelectedMsgIds(new Set());
+     setShowForwardModal(true);
+  };
+
+  const handleExecuteForward = async (target: ChatSession | UserProfile) => {
+      if (!session || !userProfile) return;
+      try {
+          let targetRoomId = 'public';
+          let targetUserId = undefined;
+
+          // Check if target is ChatSession (existing chat) or UserProfile (search result)
+          if ('room_id' in target) {
+              targetRoomId = target.room_id;
+              if(!target.is_group) targetUserId = target.partner.id;
+          } else {
+              targetRoomId = getRoomId(session.user.id, target.id);
+              targetUserId = target.id;
+          }
+
+          const selectedMessages = messages.filter(m => selectedMsgIds.has(m.id));
+          
+          await chatService.forwardMessages(selectedMessages, targetRoomId, session.user.id, userProfile, targetUserId);
+          
+          showToast("Pesan diteruskan!", "success");
+          setShowForwardModal(false);
+          setIsSelectionMode(false);
+          setSelectedMsgIds(new Set());
+
+          // Optional: Jump to that chat
+          if('room_id' in target) openChat(target.partner, target.is_group, target.group_info);
+          else openChat(target);
+
+      } catch (e: any) {
+          showToast("Gagal meneruskan pesan: " + e.message, "error");
+      }
   };
 
   const handleSendMessage = async (content: string, replyTo?: Message | null, fileUrl?: string, fileType?: 'image' | 'file') => {
@@ -327,7 +392,7 @@ export const App: React.FC = () => {
         user_id: userProfile.id,
         user_email: userProfile.username || userProfile.email,
         user_avatar: userProfile.avatar_url,
-        receiver_id: activeRoomId === 'public' || activeRoomId.length > 30 ? undefined : activePartner?.id, // If uuid length usually > 30, it might be group
+        receiver_id: activeRoomId === 'public' || activeRoomId.length > 30 ? undefined : activePartner?.id, 
         room_id: activeRoomId,
         file_url: fileUrl,
         file_type: fileType,
@@ -350,7 +415,7 @@ export const App: React.FC = () => {
         user_id: userProfile.id,
         user_email: userProfile.username || userProfile.email,
         user_avatar: userProfile.avatar_url,
-        receiver_id: activeRoomId.includes('_') ? activePartner?.id : undefined, // Only set receiver for 1-1
+        receiver_id: activeRoomId.includes('_') ? activePartner?.id : undefined, 
         room_id: activeRoomId,
         file_url: fileUrl,
         file_type: fileType,
@@ -360,6 +425,7 @@ export const App: React.FC = () => {
     if (error) {
         notificationService.notify('Gagal mengirim pesan', error.message, 'error');
         setMessages(prev => prev.filter(m => m.id !== tempId));
+        showToast("Gagal mengirim pesan.", "error");
     } else {
         fetchRecentChats(userProfile.id);
     }
@@ -370,6 +436,7 @@ export const App: React.FC = () => {
       try {
           await chatService.deleteMessageForMe(msgId, session.user.id);
           setMessages(prev => prev.filter(m => m.id !== msgId));
+          showToast("Pesan dihapus untuk saya.", "success");
       } catch (e) { console.error(e); }
   };
 
@@ -389,7 +456,7 @@ export const App: React.FC = () => {
           ${view === 'chat' ? 'hidden md:flex' : 'flex'}
       `}>
         {/* Header Sidebar */}
-        <div className="p-4 bg-telegram-primary text-white shadow-md z-10 sticky top-0">
+        <div className="p-4 bg-telegram-primary dark:bg-telegram-darkPrimary text-white shadow-md z-10 sticky top-0 transition-colors">
            <div className="flex justify-between items-center mb-4">
               <span className="font-bold text-xl tracking-tight">{APP_NAME}</span>
               <div className="flex gap-2">
@@ -574,6 +641,7 @@ export const App: React.FC = () => {
                  const currentIdx = stories.findIndex(g => g.user.id === viewingStoryGroup.user.id);
                  if (currentIdx > 0) setViewingStoryGroup(stories[currentIdx - 1]);
              }}
+             onAddStory={() => { setIsCreatingStory(true); setViewingStoryGroup(null); }}
           />
       )}
       
@@ -594,6 +662,23 @@ export const App: React.FC = () => {
           />
       )}
 
+      {showForwardModal && userProfile && (
+          <ForwardModal 
+              currentUserId={userProfile.id}
+              onClose={() => setShowForwardModal(false)}
+              onForward={handleExecuteForward}
+          />
+      )}
+
     </div>
   );
+};
+
+// EXPORTED APP (Wrapped)
+export const App: React.FC = () => {
+    return (
+        <UIProvider>
+            <MainApp />
+        </UIProvider>
+    );
 };

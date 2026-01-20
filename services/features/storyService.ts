@@ -1,13 +1,14 @@
 import { supabase } from '../../services/supabaseClient';
-import { Story, UserProfile, GroupedStories, StoryView } from '../../types';
+import { Story, GroupedStories, StoryView } from '../../types';
 
 export const storyService = {
-  // Ambil semua active stories (belum expired)
+  // Ambil semua active stories
+  // Backend RLS juga harus dikonfigurasi untuk memfilter expires_at < now() agar aman
   fetchStories: async (currentUserId: string): Promise<GroupedStories[]> => {
     const { data, error } = await supabase
       .from('stories')
       .select('*, user:profiles(*)')
-      .gt('expires_at', new Date().toISOString()) 
+      .gt('expires_at', new Date().toISOString()) // Filter Client Side backup
       .order('created_at', { ascending: true });
 
     if (error) {
@@ -15,11 +16,11 @@ export const storyService = {
       return [];
     }
 
-    // Filter privacy: Jika private, hanya owner yang bisa lihat
     const filteredData = (data as Story[]).filter(s => {
         if (s.privacy === 'private') {
             return s.user_id === currentUserId;
         }
+        // Logic Close Friends bisa ditambahkan disini jika ada list teman
         return true;
     });
 
@@ -73,38 +74,63 @@ export const storyService = {
         mediaUrl = data.publicUrl;
     }
 
+    // Set expires_at to 24 hours from now
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
     const { error } = await supabase.from('stories').insert({
         user_id: userId,
         media_type: type,
         media_url: mediaUrl,
         caption: caption,
         background_color: bgColor,
-        privacy: privacy
+        privacy: privacy,
+        expires_at: expiresAt
     });
 
     if (error) throw error;
   },
 
   deleteStory: async (storyId: number) => {
+      // 1. Ambil data story dulu untuk dapat path file
+      const { data: story, error: fetchError } = await supabase
+          .from('stories')
+          .select('media_url, user_id')
+          .eq('id', storyId)
+          .single();
+      
+      if (fetchError) throw fetchError;
+
+      // 2. Hapus File dari Storage (Jika ada media)
+      if (story && story.media_url) {
+          try {
+              const url = new URL(story.media_url);
+              // Format URL biasanya: .../storage/v1/object/public/stories/[userId]/[filename]
+              // Kita butuh path setelah bucket name ('stories')
+              const pathParts = url.pathname.split('/stories/');
+              if (pathParts.length > 1) {
+                  const filePath = decodeURIComponent(pathParts[1]);
+                  await supabase.storage.from('stories').remove([filePath]);
+              }
+          } catch (e) {
+              console.warn("Gagal parse/hapus file story:", e);
+          }
+      }
+
+      // 3. Hapus Row Database
       const { error } = await supabase.from('stories').delete().eq('id', storyId);
       if (error) throw error;
   },
 
-  // Record View: Mencatat bahwa user telah melihat story
   recordView: async (storyId: number, viewerId: string) => {
-      // Gunakan UPSERT ignore duplicates (via ON CONFLICT DO NOTHING di SQL, atau error handling di sini)
-      // Supabase JS tidak support ON CONFLICT DO NOTHING di simple insert, jadi kita biarkan error unique constraint terjadi (silent fail)
       const { error } = await supabase.from('story_views').insert({
           story_id: storyId,
           viewer_id: viewerId
       });
-      // Ignore error duplicate key value violates unique constraint
       if (error && error.code !== '23505') {
           console.error("Gagal record view:", error);
       }
   },
 
-  // Fetch Viewers: Untuk owner melihat siapa yang lihat storynya
   fetchViewers: async (storyId: number): Promise<StoryView[]> => {
       const { data, error } = await supabase
         .from('story_views')

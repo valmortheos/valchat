@@ -42,3 +42,18 @@ CREATE TABLE IF NOT EXISTS public.profile_gallery (
     media_url TEXT NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- 18. AUTO EXPIRE STORY HANDLING (RLS & Cleanup)
+-- Menambahkan kolom expires_at ke tabel stories jika belum ada (sesuai implementation code)
+ALTER TABLE public.stories ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE DEFAULT (now() + interval '24 hours');
+
+-- RLS Policy: Hanya perbolehkan SELECT story yang belum expired
+DROP POLICY IF EXISTS "View Active Stories" ON public.stories;
+CREATE POLICY "View Active Stories" ON public.stories FOR SELECT
+USING (expires_at > now());
+
+-- (Optional) Cron Job untuk cleanup fisik (membutuhkan pg_cron extension di project Supabase)
+-- select cron.schedule(
+--   '0 * * * *', -- Setiap jam
+--   $$delete from public.stories where expires_at < now()$$
+-- );
